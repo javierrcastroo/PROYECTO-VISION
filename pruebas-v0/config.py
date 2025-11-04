@@ -37,3 +37,6 @@ LABEL_TO_NUM = {
 # Si la distancia media de los k vecinos (best_dist) es MAYOR que esto,
 # consideramos que la predicción no es fiable y devolvemos "????".
 CONFIDENCE_THRESHOLD = 1
+# ---- corrección de distorsión (opcional) ----
+USE_UNDISTORT = True
+CAMERA_PARAMS_PATH = "camera_params.npz"

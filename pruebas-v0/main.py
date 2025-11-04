@@ -13,6 +13,8 @@ from features import compute_feature_vector
 from storage import save_gesture_example, load_gesture_gallery, save_sequence_json
 from classifier import knn_predict
 import ui  # importamos el módulo completo para acceder a su estado global
+import os
+from config import CAMERA_PARAMS_PATH, USE_UNDISTORT
 
 
 def majority_vote(labels):
@@ -29,7 +31,7 @@ def majority_vote(labels):
 
 def main():
     # Abrir cámara
-    cap = cv2.VideoCapture(0)
+    cap = cv2.VideoCapture(1)
     if not cap.isOpened():
         raise RuntimeError("No se pudo abrir la cámara.")
 
@@ -50,11 +52,24 @@ def main():
     # Guardamos las etiquetas ya filtradas por confianza (o "????")
     recent_preds = deque(maxlen=7)
 
+    # intentar cargar parámetros de cámara (para undistort)
+    if USE_UNDISTORT and os.path.exists(CAMERA_PARAMS_PATH):
+        _params = np.load(CAMERA_PARAMS_PATH)
+        CAM_MTX = _params["camera_matrix"]
+        DIST_COEFFS = _params["dist_coeffs"]
+        print("[INFO] Parámetros de cámara cargados, se aplicará undistort.")
+    else:
+        CAM_MTX = None
+        DIST_COEFFS = None
+        if USE_UNDISTORT:
+            print("[WARN] USE_UNDISTORT=True pero no existe camera_params.npz")
+
     while True:
         ret, frame = cap.read()
         if not ret:
             break
-
+        if CAM_MTX is not None:
+            frame = cv2.undistort(frame, CAM_MTX, DIST_COEFFS)
         # modo espejo (comenta esta línea si no quieres espejo)
         frame = cv2.flip(frame, 1)
 

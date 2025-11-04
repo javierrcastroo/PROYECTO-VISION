@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 import glob
 
-# número de esquinas internas del tablero
+# número de esquinas internas del tablero 
 # si imprimiste un tablero típico de 9x6 (muy común),
 # pon (9, 6). Si tu patrón es otro, cambia estos números.
 CHESSBOARD_SIZE = (9, 6)

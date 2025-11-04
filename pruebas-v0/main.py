@@ -7,7 +7,7 @@ from config import (
     RECOGNIZE_MODE,
     NORMALIZED_SIZE,
     CONFIDENCE_THRESHOLD,
-)
+)   
 from segmentation import calibrate_from_roi, segment_hand_mask
 from features import compute_feature_vector
 from storage import save_gesture_example, load_gesture_gallery, save_sequence_json

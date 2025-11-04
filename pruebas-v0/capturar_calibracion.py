@@ -4,7 +4,7 @@ import os
 # carpeta donde vamos a guardar las fotos
 SAVE_DIR = "calib_images"
 os.makedirs(SAVE_DIR, exist_ok=True)
-
+   
 cap = cv2.VideoCapture(1)
 if not cap.isOpened():
     raise RuntimeError("No se pudo abrir la cámara.")

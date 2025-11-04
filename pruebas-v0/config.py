@@ -32,7 +32,7 @@ LABEL_TO_NUM = {
     "demond" : "Demond"
 
 }
-
+   
 # Umbral de confianza:
 # Si la distancia media de los k vecinos (best_dist) es MAYOR que esto,
 # consideramos que la predicción no es fiable y devolvemos "????".

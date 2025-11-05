@@ -50,26 +50,61 @@ def calibrate_origin_color_from_roi(hsv_roi):
     return _calibrate_from_roi(hsv_roi)
 
 
-def detect_colored_points_in_board(hsv_frame, board_quad, lower, upper, max_objs=4, min_area=50):
+def keep_largest_components(mask, k=4, min_area=50):
+    """
+    Recibe una máscara binaria y devuelve otra máscara
+    donde solo están las k componentes más grandes que
+    superen min_area.
+    """
+    cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not cnts:
+        return mask
+
+    # ordenar por área
+    cnts = sorted(cnts, key=cv2.contourArea, reverse=True)
+
+    new_mask = np.zeros_like(mask)
+    kept = 0
+    for c in cnts:
+        area = cv2.contourArea(c)
+        if area < min_area:
+            continue
+        cv2.drawContours(new_mask, [c], -1, 255, -1)
+        kept += 1
+        if kept >= k:
+            break
+    return new_mask
+
+
+def detect_colored_points_in_board(hsv_frame, board_quad, lower, upper,
+                                   max_objs=4, min_area=50):
     """
     hsv_frame: frame del tablero en HSV
     board_quad: 4x2 float32 (tl,tr,br,bl)
     lower/upper: rango HSV del objeto/origen
+
     Devuelve:
       centers: lista de (x,y) en coordenadas de imagen
       mask: máscara de ese color (para debug)
     """
+    # 1) máscara por color
     mask = cv2.inRange(hsv_frame, lower, upper)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3,3), np.uint8), iterations=1)
 
+    # 2) pequeña limpieza morfológica
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,
+                            np.ones((3,3), np.uint8), iterations=1)
+
+    # 3) quedarnos solo con las k componentes más grandes
+    mask = keep_largest_components(mask, k=max_objs, min_area=min_area)
+
+    # 4) contornos finales sobre la máscara ya limpia
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
         return [], mask
 
-    # polígono del tablero para filtrar puntos fuera
     board_poly = np.array(board_quad, dtype=np.float32)
 
-    # ordenar contornos por área desc
+    # ordenar por área desc
     contours = sorted(contours, key=cv2.contourArea, reverse=True)
 
     centers = []

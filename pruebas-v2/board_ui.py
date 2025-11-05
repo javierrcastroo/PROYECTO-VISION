@@ -33,18 +33,12 @@ def board_mouse_callback(event, x, y, flags, param):
         bx_end, by_end = x, y
 
     elif event == cv2.EVENT_RBUTTONDOWN:
-        # añadir punto de medida
         measure_points.append((x, y))
-        # si hay más de 2, reseteamos para empezar otra medida
         if len(measure_points) > 2:
-            measure_points = [(x, y)]  # empezamos de nuevo solo con este
-        # print(f"[INFO] punto de medida añadido: {(x, y)}")
+            measure_points = [(x, y)]
 
 
 def draw_board_roi(img):
-    """
-    Dibuja el rectángulo del ROI si se está seleccionando.
-    """
     if board_roi_selecting or board_roi_defined:
         cv2.rectangle(
             img,
@@ -56,10 +50,27 @@ def draw_board_roi(img):
 
 
 def draw_measure_points(img):
-    """
-    Dibuja los puntos de medida (clic derecho) sobre la imagen del tablero.
-    """
     for i, (x, y) in enumerate(measure_points):
         cv2.circle(img, (x, y), 5, (0, 0, 255), -1)
         cv2.putText(img, f"P{i+1}", (x+5, y-5),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,0,255), 1, cv2.LINE_AA)
+
+
+def draw_board_hud(img):
+    """
+    HUD de la ventana 'Tablero'
+    """
+    y0 = 20
+    dy = 18
+    cv2.putText(img, "TABLERO:", (10, y0),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255,255,255), 1, cv2.LINE_AA)
+    cv2.putText(img, "b: calibrar color tablero (ROI izq)", (10, y0 + dy),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255,255,255), 1, cv2.LINE_AA)
+    cv2.putText(img, "r: calibrar ORIGEN (ROI sobre marcador)", (10, y0 + 2*dy),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255,255,255), 1, cv2.LINE_AA)
+    cv2.putText(img, "o: calibrar OBJETOS (ROI sobre ficha)", (10, y0 + 3*dy),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255,255,255), 1, cv2.LINE_AA)
+    cv2.putText(img, "Click izq: definir ROI", (10, y0 + 4*dy),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200,255,200), 1, cv2.LINE_AA)
+    cv2.putText(img, "Click dcho: punto de medida", (10, y0 + 5*dy),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200,255,200), 1, cv2.LINE_AA)

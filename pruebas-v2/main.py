@@ -123,6 +123,7 @@ def main():
 
         # dibujar ROI del tablero
         board_ui.draw_board_roi(vis_board)
+        board_ui.draw_board_hud(vis_board)
 
         obj_mask = None
         origin_mask = None

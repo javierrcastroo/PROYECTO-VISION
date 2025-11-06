@@ -78,6 +78,8 @@ def main():
             cv2.imshow("Mascara objetos", masks_board["obj"])
         if masks_board["orig"] is not None:
             cv2.imshow("Mascara origen", masks_board["orig"])
+        if masks_board["warp"] is not None:
+            cv2.imshow("Tablero aplanado", masks_board["warp"])
 
         # teclado
         key = cv2.waitKey(1) & 0xFF

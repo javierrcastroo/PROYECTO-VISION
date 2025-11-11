@@ -5,14 +5,12 @@ import numpy as np
 
 from board_config import USE_UNDISTORT_BOARD, BOARD_CAMERA_PARAMS_PATH, WARP_SIZE
 import board_ui
-import board_tracker
-import object_tracker
 import board_state
 import board_processing as bp
-
+import aruco_utils  
 
 def main():
-    cap = cv2.VideoCapture(1)
+    cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         raise RuntimeError("No se pudo abrir la cámara 1 (tablero)")
 
@@ -22,7 +20,7 @@ def main():
         data = np.load(BOARD_CAMERA_PARAMS_PATH)
         mtx = data["camera_matrix"]
         dist = data["dist_coeffs"]
-        print("[INFO] Undistort activado")
+        
 
     # dos tableros
     boards_state_list = [
@@ -38,8 +36,8 @@ def main():
         if not ok:
             break
 
-        # detectar el cubo verde (origen global) CADA FRAME
-        _detect_global_origin(frame)
+        # detectar el ORIGEN con ArUco cada frame
+        aruco_utils.update_global_origin_from_aruco(frame, aruco_id=0)
 
         # procesar todos los tableros con el origen global actual
         vis, mask_b, mask_o, _ = bp.process_all_boards(
@@ -57,7 +55,7 @@ def main():
             cv2.circle(vis, (int(gx), int(gy)), 10, (0, 255, 0), -1)
             cv2.putText(
                 vis,
-                "ORIGEN (verde)",
+                "ORIGEN (ArUco)",
                 (int(gx) + 10, int(gy) - 10),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.6,
@@ -83,46 +81,18 @@ def main():
     cv2.destroyAllWindows()
 
 
-def _detect_global_origin(frame):
-    """
-    Busca en TODO el frame el color que se calibró con 'r'
-    y actualiza board_state.GLOBAL_ORIGIN cada frame.
-    Si un frame no lo ve, aguanta unos cuantos.
-    """
-    if not hasattr(object_tracker, "current_origin_lower"):
-        return
-
-    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-
-    # cuadrilátero que cubre toda la imagen
-    h, w = frame.shape[:2]
-    full_quad = np.array([[0, 0], [w, 0], [w, h], [0, h]], dtype=np.float32)
-
-    pts, _ = object_tracker.detect_colored_points_in_board(
-        hsv,
-        full_quad,
-        object_tracker.current_origin_lower,
-        object_tracker.current_origin_upper,
-        max_objs=1,
-        min_area=40,
-    )
-
-    if pts:
-        board_state.GLOBAL_ORIGIN = pts[0]
-        board_state.GLOBAL_ORIGIN_MISS = 0
-    else:
-        # si no lo ve este frame, aguanta unos cuantos
-        board_state.GLOBAL_ORIGIN_MISS += 1
-        if board_state.GLOBAL_ORIGIN_MISS > board_state.GLOBAL_ORIGIN_MAX_MISS:
-            board_state.GLOBAL_ORIGIN = None
-
-
 def handle_keys(key, frame):
-    # calibrar color del tablero
+   
+    # b = color tablero
+    # o = color de las fichas
+    import board_tracker
+    import object_tracker
+    import board_ui as bu
+
     if key == ord("b"):
-        if board_ui.board_roi_defined:
-            x0, x1 = sorted([board_ui.bx_start, board_ui.bx_end])
-            y0, y1 = sorted([board_ui.by_start, board_ui.by_end])
+        if bu.board_roi_defined:
+            x0, x1 = sorted([bu.bx_start, bu.bx_end])
+            y0, y1 = sorted([bu.by_start, bu.by_end])
             roi_hsv = cv2.cvtColor(frame[y0:y1, x0:x1], cv2.COLOR_BGR2HSV)
             lo, up = board_tracker.calibrate_board_color_from_roi(roi_hsv)
             board_tracker.current_lower, board_tracker.current_upper = lo, up
@@ -130,11 +100,10 @@ def handle_keys(key, frame):
         else:
             print("[WARN] dibuja ROI en 'Tablero' primero")
 
-    # calibrar color de las fichas
     elif key == ord("o"):
-        if board_ui.board_roi_defined:
-            x0, x1 = sorted([board_ui.bx_start, board_ui.bx_end])
-            y0, y1 = sorted([board_ui.by_start, board_ui.by_end])
+        if bu.board_roi_defined:
+            x0, x1 = sorted([bu.bx_start, bu.bx_end])
+            y0, y1 = sorted([bu.by_start, bu.by_end])
             roi_hsv = cv2.cvtColor(frame[y0:y1, x0:x1], cv2.COLOR_BGR2HSV)
             lo, up = object_tracker.calibrate_object_color_from_roi(roi_hsv)
             object_tracker.current_obj_lower, object_tracker.current_obj_upper = lo, up
@@ -142,21 +111,6 @@ def handle_keys(key, frame):
         else:
             print("[WARN] dibuja ROI sobre la ficha")
 
-    # 🔴 ahora 'r' = calibrar el color del CUBO VERDE (origen global)
-    elif key == ord("r"):
-        if board_ui.board_roi_defined:
-            x0, x1 = sorted([board_ui.bx_start, board_ui.bx_end])
-            y0, y1 = sorted([board_ui.by_start, board_ui.by_end])
-            roi_hsv = cv2.cvtColor(frame[y0:y1, x0:x1], cv2.COLOR_BGR2HSV)
-            lo, up = object_tracker.calibrate_origin_color_from_roi(roi_hsv)
-            object_tracker.current_origin_lower = lo
-            object_tracker.current_origin_upper = up
-            # forzamos a que la próxima iteración vuelva a buscarlo
-            board_state.GLOBAL_ORIGIN = None
-            board_state.GLOBAL_ORIGIN_MISS = 0
-            print("[INFO] calibrado ORIGEN GLOBAL (cubo verde):", lo, up)
-        else:
-            print("[WARN] dibuja ROI sobre el cubo verde para el origen")
 
 
 if __name__ == "__main__":

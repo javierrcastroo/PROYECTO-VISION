@@ -8,7 +8,7 @@ _ARUCO_DICT = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_5X5_100)
 _ARUCO_PARAMS = cv2.aruco.DetectorParameters()
 
 # ID del marcador que usaremos como origen global
-ARUCO_ORIGIN_ID = 0 
+ARUCO_ORIGIN_ID = 2
 
 
 def detect_aruco_origin(frame, aruco_id=ARUCO_ORIGIN_ID, draw=True):

@@ -100,6 +100,7 @@ def main():
 
         # -------- teclas de mano --------
         if key == ord('c'):
+            
             if ui.roi_defined:
                 x0, x1 = sorted([ui.x_start, ui.x_end])
                 y0, y1 = sorted([ui.y_start, ui.y_end])

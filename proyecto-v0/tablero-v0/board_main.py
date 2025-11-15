@@ -10,7 +10,7 @@ import board_processing as bp
 import aruco_utils  
 
 def main():
-    cap = cv2.VideoCapture(0)
+    cap = cv2.VideoCapture(1)
     if not cap.isOpened():
         raise RuntimeError("No se pudo abrir la cámara 1 (tablero)")
 
@@ -37,7 +37,7 @@ def main():
             break
 
         # detectar el ORIGEN con ArUco cada frame
-        aruco_utils.update_global_origin_from_aruco(frame, aruco_id=0)
+        aruco_utils.update_global_origin_from_aruco(frame, aruco_id=2)
 
         # procesar todos los tableros con el origen global actual
         vis, mask_b, mask_o, _ = bp.process_all_boards(

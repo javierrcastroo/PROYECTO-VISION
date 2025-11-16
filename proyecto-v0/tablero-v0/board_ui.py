@@ -12,7 +12,7 @@ measure_points = []   # lista de (x, y)
 
 def board_mouse_callback(event, x, y, flags, param):
     """
-    - Botón izquierdo: definir ROI del tablero (para calibrar HSV con 'b')
+    - Botón izquierdo: definir ROI del tablero (para calibrar HSV con 'b', 'o', 'm', ...)
     - Botón derecho: añadir punto de medida
     """
     global board_roi_selecting, board_roi_defined
@@ -77,9 +77,32 @@ def draw_board_hud(img):
                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255,255,255), 1, cv2.LINE_AA)
     cv2.putText(img, "r: calibrar ORIGEN (ROI marcador)", (10, y0 + 2*dy),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255,255,255), 1, cv2.LINE_AA)
-    cv2.putText(img, "o: calibrar OBJETOS (ROI ficha)", (10, y0 + 3*dy),
+    cv2.putText(img, "2: calibrar BARCO x2 (ROI barco)", (10, y0 + 3*dy),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255,255,255), 1, cv2.LINE_AA)
-    cv2.putText(img, "Click izq: definir ROI", (10, y0 + 4*dy),
+    cv2.putText(img, "1: calibrar BARCO x1 (ROI barco)", (10, y0 + 4*dy),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255,255,255), 1, cv2.LINE_AA)
+    cv2.putText(img, "m: calibrar MUN (ROI municion)", (10, y0 + 5*dy),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255,255,255), 1, cv2.LINE_AA)
+    cv2.putText(img, "Click izq: definir ROI", (10, y0 + 6*dy),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200,255,200), 1, cv2.LINE_AA)
-    cv2.putText(img, "Click dcho: punto de medida", (10, y0 + 5*dy),
+    cv2.putText(img, "Click dcho: punto de medida", (10, y0 + 7*dy),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200,255,200), 1, cv2.LINE_AA)
+
+
+def draw_validation_result(img, quad, text, is_valid):
+    if quad is None:
+        return
+    color = (0, 255, 0) if is_valid else (0, 0, 255)
+    tl = quad[0]
+    x = int(tl[0])
+    y = int(tl[1]) - 10
+    cv2.putText(
+        img,
+        text,
+        (x, max(20, y)),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.6,
+        color,
+        2,
+        cv2.LINE_AA,
+    )

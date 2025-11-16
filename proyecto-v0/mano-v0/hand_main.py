@@ -18,11 +18,42 @@ from classifier import knn_predict
 from storage import save_gesture_example, load_gesture_gallery, save_sequence_json
 from collections import deque
 
+GESTURE_WINDOW_FRAMES = 150
+MAX_SEQUENCE_LENGTH = 2
+TRIGGER_GESTURES = {"demond", "demonio"}
+CONFIRM_GESTURE = "ok"
+REJECT_GESTURE = "nook"
+PRINT_GESTURE = "cool"
+CONTROL_GESTURES = TRIGGER_GESTURES | {CONFIRM_GESTURE, REJECT_GESTURE, PRINT_GESTURE}
+
 
 def majority_vote(labels):
     if not labels:
         return None
     return max(set(labels), key=labels.count)
+
+
+class GestureWindow:
+    def __init__(self, size=GESTURE_WINDOW_FRAMES):
+        self.size = size
+        self.labels = []
+
+    def reset(self):
+        self.labels = []
+
+    def push(self, label):
+        label = label if label is not None else "????"
+        self.labels.append(label)
+        if len(self.labels) >= self.size:
+            winner = majority_vote(self.labels)
+            self.reset()
+            return winner
+        return None
+
+    def progress(self):
+        if self.size == 0:
+            return 0.0
+        return min(1.0, len(self.labels) / float(self.size))
 
 
 def main():
@@ -43,6 +74,20 @@ def main():
     current_label = "2dedos"
     acciones = []
     recent_preds = deque(maxlen=7)
+    capture_state = "STANDBY"
+    pending_candidate = None
+    gesture_window = GestureWindow()
+    status_lines = ["Standby: haz 'demond' para activar el registro."]
+
+    def set_state(new_state, lines):
+        nonlocal capture_state, status_lines
+        capture_state = new_state
+        status_lines = lines
+        gesture_window.reset()
+
+    def set_status(lines):
+        nonlocal status_lines
+        status_lines = lines
 
     cv2.namedWindow("Mano")
     cv2.setMouseCallback("Mano", ui.mouse_callback)
@@ -88,6 +133,14 @@ def main():
         # HUD
         ui.draw_hud(vis, lower_skin, upper_skin, current_label)
         ui.draw_prediction(vis, stable_label, best_dist if best_dist else 0.0)
+        ui.draw_sequence_status(
+            vis,
+            acciones,
+            capture_state,
+            pending_candidate,
+            status_lines,
+            gesture_window.progress(),
+        )
 
         # mostrar
         cv2.imshow("Mano", vis)
@@ -97,6 +150,61 @@ def main():
         key = cv2.waitKey(1) & 0xFF
         if key in (27, ord('q')):
             break
+
+        # -------- flujo controlado por gestos --------
+        resolved_label = gesture_window.push(stable_label)
+
+        if resolved_label is not None:
+            if capture_state == "STANDBY":
+                if resolved_label in TRIGGER_GESTURES:
+                    set_state("CAPTURA", ["Sistema activo: muestra el primer gesto."])
+                else:
+                    set_status(["Sigue en standby, haz 'demond' para comenzar."])
+
+            elif capture_state == "CAPTURA":
+                if resolved_label == "????" or resolved_label in CONTROL_GESTURES:
+                    set_status(["Gesto no válido, repítelo."])
+                else:
+                    pending_candidate = resolved_label
+                    set_state(
+                        "CONFIRMACION",
+                        [
+                            f"¿Tu gesto es '{pending_candidate}'?",
+                            "Confirma con 'ok' o repite con 'nook'.",
+                        ],
+                    )
+
+            elif capture_state == "CONFIRMACION":
+                if resolved_label == CONFIRM_GESTURE and pending_candidate:
+                    acciones.append(pending_candidate)
+                    print(f"[INFO] Añadido gesto confirmado: {pending_candidate}")
+                    pending_candidate = None
+                    if len(acciones) >= MAX_SEQUENCE_LENGTH:
+                        set_state(
+                            "COOL",
+                            ["Secuencia completa, haz 'cool' para imprimirla."],
+                        )
+                    else:
+                        set_state("CAPTURA", ["Gesto guardado. Muestra el siguiente gesto."])
+                elif resolved_label == REJECT_GESTURE:
+                    print("[INFO] Gesto rechazado, repite el anterior.")
+                    pending_candidate = None
+                    set_state("CAPTURA", ["Repite el gesto a registrar."])
+                else:
+                    set_status(["Se esperaba 'ok' o 'nook'."])
+
+            elif capture_state == "COOL":
+                if resolved_label == PRINT_GESTURE and len(acciones) == MAX_SEQUENCE_LENGTH:
+                    print("[INFO] Secuencia final:", acciones)
+                    save_sequence_json(acciones)
+                    acciones.clear()
+                    pending_candidate = None
+                    set_state(
+                        "STANDBY",
+                        ["Standby: haz 'demond' para activar un nuevo registro."],
+                    )
+                else:
+                    set_status(["Secuencia lista. Usa 'cool' para imprimirla."])
 
         # -------- teclas de mano --------
         if key == ord('c'):
@@ -122,15 +230,18 @@ def main():
             else:
                 print("[WARN] no hay gesto válido")
 
-        elif key == ord('a'):
-            acciones = ui.append_action(acciones, stable_label)
-
-        elif key == ord('p'):
-            save_sequence_json(acciones)
-            print("[INFO] secuencia guardada:", acciones)
-            acciones.clear()
-
-        elif key in (ord('0'), ord('1'), ord('2'), ord('3'), ord('4'), ord('5'), ord('d'), ord('p'), ord('-')):
+        elif key in (
+            ord('0'),
+            ord('1'),
+            ord('2'),
+            ord('3'),
+            ord('4'),
+            ord('5'),
+            ord('d'),
+            ord('p'),
+            ord('-'),
+            ord('n'),
+        ):
             mapping = {
                 ord('0'): "0dedos",
                 ord('1'): "1dedo",
@@ -141,6 +252,7 @@ def main():
                 ord('d'): "demonio",
                 ord('p'): "ok",
                 ord('-'): "cool",
+                ord('n'): "nook",
             }
             current_label = mapping[key]
 

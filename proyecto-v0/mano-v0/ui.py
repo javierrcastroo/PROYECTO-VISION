@@ -28,7 +28,7 @@ def draw_roi_rectangle(img):
                       (0, 255, 255), 2)
 
 def draw_hud(img, lower_skin, upper_skin, current_label):
-    hud = "ROI: arrastra | 'c' calib | 'g' guarda | 'a' add | 'p' json | 'q' salir"
+    hud = "ROI: arrastra | 'c' calib | 'g' guarda muestra | 'q' salir"
     cv2.putText(img, hud, (10, 20),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                 (255, 255, 255), 1, cv2.LINE_AA)
@@ -67,11 +67,69 @@ def draw_hand_box(img, mask):
     box = box.astype(int)
     cv2.polylines(img, [box], True, (255, 0, 255), 2)
 
-def append_action(acciones, stable_label):
-    if stable_label is None:
-        print("[WARN] No hay gesto estable para añadir.")
-        return acciones
-    acciones.append(stable_label)
-    print(f"[INFO] Añadido gesto a la lista: {stable_label}")
-    print(f"[INFO] Lista actual: {acciones}")
-    return acciones
+def draw_sequence_status(img, acciones, capture_state, pending, status_lines, progress):
+    y = 100
+    seq_text = ", ".join(acciones) if acciones else "(vacía)"
+    cv2.putText(img,
+                f"Secuencia (max 2): {seq_text}",
+                (10, y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                (255, 255, 0),
+                1,
+                cv2.LINE_AA)
+    y += 20
+    cv2.putText(img,
+                f"Estado: {capture_state}",
+                (10, y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (200, 200, 255),
+                1,
+                cv2.LINE_AA)
+    if pending:
+        y += 20
+        cv2.putText(img,
+                    f"Pendiente: {pending}",
+                    (10, y),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (200, 255, 200),
+                    1,
+                    cv2.LINE_AA)
+    for line in status_lines[:2]:
+        if not line:
+            continue
+        y += 20
+        cv2.putText(img,
+                    line,
+                    (10, y),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (255, 255, 255),
+                    1,
+                    cv2.LINE_AA)
+
+    bar_x = 10
+    bar_y = y + 30
+    bar_w = 200
+    bar_h = 10
+    cv2.rectangle(img,
+                  (bar_x, bar_y),
+                  (bar_x + bar_w, bar_y + bar_h),
+                  (100, 100, 100),
+                  1)
+    fill_w = int(bar_w * max(0.0, min(1.0, progress)))
+    cv2.rectangle(img,
+                  (bar_x, bar_y),
+                  (bar_x + fill_w, bar_y + bar_h),
+                  (0, 200, 0),
+                  -1)
+    cv2.putText(img,
+                f"Ventana 150f: {int(progress * 100)}%",
+                (bar_x + 5, bar_y + 25),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.45,
+                (0, 200, 0),
+                1,
+                cv2.LINE_AA)

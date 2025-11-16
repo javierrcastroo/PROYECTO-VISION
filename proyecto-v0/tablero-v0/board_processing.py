@@ -115,11 +115,13 @@ def _assign_detections_to_slots(boards_found, boards_state_list):
 
 def process_single_board(vis_img, frame_bgr, quad, slot, warp_size=500):
     """
-    Procesa SOLO un tablero:
-    - aplanado
-    - detección de barcos por color
-    - pintado de las celdas ocupadas
+    Procesa un tablero individual detectando centros de barcos de dos y una casilla
+    con el mismo pipeline basado en blobs que teníamos antes: calibras con un ROI,
+    buscamos contornos del color elegido, calculamos su centroide y lo traducimos
+    a una casilla (A1, B2, ...).
     """
+
+    hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
 
     src = np.array(quad, dtype=np.float32)
     dst = np.array(
@@ -134,42 +136,60 @@ def process_single_board(vis_img, frame_bgr, quad, slot, warp_size=500):
     H_warp = cv2.getPerspectiveTransform(src, dst)
     H_inv = cv2.getPerspectiveTransform(dst, src)
     warp_img = cv2.warpPerspective(frame_bgr, H_warp, (warp_size, warp_size))
-    warp_hsv = cv2.cvtColor(warp_img, cv2.COLOR_BGR2HSV)
 
-    ship_two_mask, ship_two_cells, ship_two_centers = detect_ship_cells(
-        warp_hsv,
+    ship_two_pts, ship_two_mask = object_tracker.detect_colored_points_in_board(
+        hsv,
+        quad,
         object_tracker.current_ship_two_lower,
         object_tracker.current_ship_two_upper,
-        min_area=150,
-        max_cells_per_contour=2,
+        max_objs=2,
+        min_area=40,
     )
 
-    ship_one_mask, ship_one_cells, ship_one_centers = detect_ship_cells(
-        warp_hsv,
+    ship_one_pts, ship_one_mask = object_tracker.detect_colored_points_in_board(
+        hsv,
+        quad,
         object_tracker.current_ship_one_lower,
         object_tracker.current_ship_one_upper,
-        min_area=50,
-        max_cells_per_contour=1,
+        max_objs=3,
+        min_area=40,
     )
 
-    slot["ship_two_cells"] = ship_two_cells
-    slot["ship_one_cells"] = ship_one_cells
+    _draw_points(vis_img, ship_two_pts, (0, 0, 255))
+    _draw_points(vis_img, ship_one_pts, (0, 255, 255))
+    _draw_points_on_warp(warp_img, ship_two_pts, H_warp, (0, 0, 255))
+    _draw_points_on_warp(warp_img, ship_one_pts, H_warp, (0, 255, 255))
 
-    draw_cells_on_warp(warp_img, ship_two_cells, (0, 0, 255))
-    draw_cells_on_warp(warp_img, ship_one_cells, (0, 255, 255))
-    draw_centers_on_warp(warp_img, ship_two_centers, (0, 0, 255))
-    draw_centers_on_warp(warp_img, ship_one_centers, (0, 255, 255))
-    draw_cells_on_board(vis_img, H_inv, ship_two_cells, (0, 0, 255), warp_size)
-    draw_cells_on_board(vis_img, H_inv, ship_one_cells, (0, 255, 255), warp_size)
+    ship_two_cells_raw, ship_two_labels = _map_points_to_cells(
+        ship_two_pts, H_warp, warp_size
+    )
+    ship_one_cells_raw, ship_one_labels = _map_points_to_cells(
+        ship_one_pts, H_warp, warp_size
+    )
 
-    cv2.imshow(f"{slot['name']} aplanado", warp_img)
+    slot["ship_two_cells"] = sorted(set(ship_two_cells_raw))
+    slot["ship_one_cells"] = sorted(set(ship_one_cells_raw))
+
+    display_entries = []
+    for idx, label in enumerate(ship_two_labels, 1):
+        display_entries.append((f"B2-{idx}", label))
+    for idx, label in enumerate(ship_one_labels, 1):
+        display_entries.append((f"B1-{idx}", label))
+
+    _annotate_detections(vis_img, warp_img, slot["name"], display_entries)
 
     layout_info = {
         "name": slot["name"],
-        "ship_two_cells": ship_two_cells,
-        "ship_one_cells": ship_one_cells,
+        "ship_two_cells": slot["ship_two_cells"],
+        "ship_one_cells": slot["ship_one_cells"],
         "board_size": board_tracker.BOARD_SQUARES,
     }
+
+    if display_entries:
+        for tag, label in display_entries:
+            print(f"[{slot['name']}] {tag} -> {label}")
+
+    cv2.imshow(f"{slot['name']} aplanado", warp_img)
 
     return ship_two_mask, ship_one_mask, layout_info
 
@@ -191,132 +211,77 @@ def draw_quad(img, quad, color=(0, 255, 255)):
     cv2.polylines(img, [q], True, color, 2)
 
 
-def detect_ship_cells(
-    warp_hsv,
-    lower,
-    upper,
-    min_area=60,
-    max_cells_per_contour=None,
-):
-    mask = cv2.inRange(warp_hsv, lower, upper)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8), iterations=1)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8), iterations=1)
+def _map_points_to_cells(points, H_warp, warp_size):
+    if not points:
+        return [], []
 
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    contours = sorted(contours, key=cv2.contourArea, reverse=True)
-
+    pts = np.array(points, dtype=np.float32).reshape(-1, 1, 2)
+    warped = cv2.perspectiveTransform(pts, H_warp).reshape(-1, 2)
     n = board_tracker.BOARD_SQUARES
-    h, w = mask.shape[:2]
-    cell_w = w / n if n else w
-    cell_h = h / n if n else h
+    if n <= 0:
+        return [], []
+    cell_size = warp_size / n
 
     cells = []
-    centers = []
-
-    for c in contours:
-        area = cv2.contourArea(c)
-        if area < min_area:
-            continue
-
-        M = cv2.moments(c)
-        if M["m00"] == 0:
-            continue
-        cx = int(M["m10"] / M["m00"])
-        cy = int(M["m01"] / M["m00"])
-        centers.append((cx, cy))
-
-        bbox_cells = _cells_from_bounding_box(c, cell_w, cell_h, n)
-        if not bbox_cells:
-            row = _clip_index(int(cy / cell_h) if n else 0, n)
-            col = _clip_index(int(cx / cell_w) if n else 0, n)
-            bbox_cells = [(row, col)]
-
-        if max_cells_per_contour is not None:
-            bbox_cells = _limit_cells_near_center(bbox_cells, (cx, cy), cell_w, cell_h, max_cells_per_contour)
-
-        cells.extend(bbox_cells)
-
-    cells = sorted(set(cells))
-    return mask, cells, centers
+    labels = []
+    for wx, wy in warped:
+        col = _clip_cell_index(int(np.floor(wx / cell_size)), n)
+        row = _clip_cell_index(int(np.floor(wy / cell_size)), n)
+        cells.append((row, col))
+        labels.append(_format_cell_label(row, col))
+    return cells, labels
 
 
-def _cells_from_bounding_box(contour, cell_w, cell_h, n):
-    if n <= 0:
-        return []
-    x, y, w, h = cv2.boundingRect(contour)
-    if w <= 0 or h <= 0:
-        return []
-
-    col_start = _clip_index(int(np.floor(x / cell_w)), n)
-    col_end = _clip_index(int(np.floor((x + w - 1) / cell_w)), n)
-    row_start = _clip_index(int(np.floor(y / cell_h)), n)
-    row_end = _clip_index(int(np.floor((y + h - 1) / cell_h)), n)
-
-    cells = []
-    for row in range(row_start, row_end + 1):
-        for col in range(col_start, col_end + 1):
-            cells.append((row, col))
-    return cells
+def _draw_points(img, points, color):
+    for (cx, cy) in points:
+        cv2.circle(img, (int(cx), int(cy)), 6, color, -1)
 
 
-def _limit_cells_near_center(cells, center, cell_w, cell_h, limit):
-    if len(cells) <= limit:
-        return cells
-
-    cx, cy = center
-
-    def cell_distance(cell):
-        row, col = cell
-        cell_cx = (col + 0.5) * cell_w
-        cell_cy = (row + 0.5) * cell_h
-        return (cell_cx - cx) ** 2 + (cell_cy - cy) ** 2
-
-    sorted_cells = sorted(cells, key=cell_distance)
-    return sorted_cells[:limit]
-
-
-def _clip_index(idx, n):
-    if n <= 0:
-        return 0
-    return max(0, min(n - 1, idx))
-
-
-def draw_cells_on_warp(warp_img, cells, color):
-    n = board_tracker.BOARD_SQUARES
-    h, w = warp_img.shape[:2]
-    cell_w = w / n if n else w
-    cell_h = h / n if n else h
-    for row, col in cells:
-        x0 = int(col * cell_w)
-        x1 = int((col + 1) * cell_w)
-        y0 = int(row * cell_h)
-        y1 = int((row + 1) * cell_h)
-        cv2.rectangle(warp_img, (x0, y0), (x1, y1), color, 2)
-
-
-def draw_cells_on_board(vis_img, H_inv, cells, color, warp_size):
-    if not cells:
+def _draw_points_on_warp(warp_img, points, H_warp, color):
+    if not points:
         return
-    n = board_tracker.BOARD_SQUARES
-    cell_w = warp_size / n if n else warp_size
-    for row, col in cells:
-        x0 = col * cell_w
-        x1 = (col + 1) * cell_w
-        y0 = row * cell_w
-        y1 = (row + 1) * cell_w
-        quad = np.array(
-            [
-                [x0, y0],
-                [x1, y0],
-                [x1, y1],
-                [x0, y1],
-            ],
-            dtype=np.float32,
+    pts = np.array(points, dtype=np.float32).reshape(-1, 1, 2)
+    warped = cv2.perspectiveTransform(pts, H_warp).reshape(-1, 2)
+    for wx, wy in warped:
+        cv2.circle(warp_img, (int(wx), int(wy)), 6, color, 2)
+
+
+def _annotate_detections(vis_img, warp_img, slot_name, entries):
+    if not entries:
+        return
+
+    y_offset = 120 if slot_name == "T1" else 220
+    for tag, label in entries:
+        text = f"{slot_name}-{tag}: {label}"
+        cv2.putText(
+            vis_img,
+            text,
+            (10, y_offset),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (0, 255, 255),
+            1,
         )
-        pts = cv2.perspectiveTransform(quad[None, :, :], H_inv)[0]
-        cv2.polylines(vis_img, [pts.astype(int)], True, color, 2)
+        y_offset += 18
+
+    for idx, (tag, label) in enumerate(entries):
+        base_y = 25 + idx * 22
+        cv2.rectangle(warp_img, (10, base_y - 15), (260, base_y + 5), (0, 0, 0), -1)
+        cv2.putText(
+            warp_img,
+            f"{tag}: {label}",
+            (15, base_y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (0, 255, 255),
+            1,
+            cv2.LINE_AA,
+        )
 
 
-def draw_centers_on_warp(warp_img, centers, color):
-    for cx, cy in centers:
-        cv2.circle(warp_img, (int(cx), int(cy)), 6, color, 2)
+def _format_cell_label(row, col):
+    return f"{chr(ord('A') + col)}{row + 1}"
+
+
+def _clip_cell_index(idx, n):
+    return max(0, min(n - 1, idx))

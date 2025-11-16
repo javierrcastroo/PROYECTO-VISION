@@ -136,18 +136,20 @@ def process_single_board(vis_img, frame_bgr, quad, slot, warp_size=500):
     warp_img = cv2.warpPerspective(frame_bgr, H_warp, (warp_size, warp_size))
     warp_hsv = cv2.cvtColor(warp_img, cv2.COLOR_BGR2HSV)
 
-    ship_two_mask, ship_two_cells = detect_ship_cells(
+    ship_two_mask, ship_two_cells, ship_two_centers = detect_ship_cells(
         warp_hsv,
         object_tracker.current_ship_two_lower,
         object_tracker.current_ship_two_upper,
-        min_ratio=0.12,
+        min_area=150,
+        max_cells_per_contour=2,
     )
 
-    ship_one_mask, ship_one_cells = detect_ship_cells(
+    ship_one_mask, ship_one_cells, ship_one_centers = detect_ship_cells(
         warp_hsv,
         object_tracker.current_ship_one_lower,
         object_tracker.current_ship_one_upper,
-        min_ratio=0.2,
+        min_area=50,
+        max_cells_per_contour=1,
     )
 
     slot["ship_two_cells"] = ship_two_cells
@@ -155,6 +157,8 @@ def process_single_board(vis_img, frame_bgr, quad, slot, warp_size=500):
 
     draw_cells_on_warp(warp_img, ship_two_cells, (0, 0, 255))
     draw_cells_on_warp(warp_img, ship_one_cells, (0, 255, 255))
+    draw_centers_on_warp(warp_img, ship_two_centers, (0, 0, 255))
+    draw_centers_on_warp(warp_img, ship_one_centers, (0, 255, 255))
     draw_cells_on_board(vis_img, H_inv, ship_two_cells, (0, 0, 255), warp_size)
     draw_cells_on_board(vis_img, H_inv, ship_one_cells, (0, 255, 255), warp_size)
 
@@ -187,10 +191,19 @@ def draw_quad(img, quad, color=(0, 255, 255)):
     cv2.polylines(img, [q], True, color, 2)
 
 
-def detect_ship_cells(warp_hsv, lower, upper, min_ratio=0.15):
+def detect_ship_cells(
+    warp_hsv,
+    lower,
+    upper,
+    min_area=60,
+    max_cells_per_contour=None,
+):
     mask = cv2.inRange(warp_hsv, lower, upper)
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8), iterations=1)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8), iterations=1)
+
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours = sorted(contours, key=cv2.contourArea, reverse=True)
 
     n = board_tracker.BOARD_SQUARES
     h, w = mask.shape[:2]
@@ -198,21 +211,74 @@ def detect_ship_cells(warp_hsv, lower, upper, min_ratio=0.15):
     cell_h = h / n if n else h
 
     cells = []
-    for row in range(n):
-        for col in range(n):
-            x0 = int(col * cell_w)
-            x1 = int((col + 1) * cell_w)
-            y0 = int(row * cell_h)
-            y1 = int((row + 1) * cell_h)
-            roi = mask[y0:y1, x0:x1]
-            if roi.size == 0:
-                continue
-            ratio = cv2.countNonZero(roi) / float(roi.size)
-            if ratio >= min_ratio:
-                cells.append((row, col))
+    centers = []
+
+    for c in contours:
+        area = cv2.contourArea(c)
+        if area < min_area:
+            continue
+
+        M = cv2.moments(c)
+        if M["m00"] == 0:
+            continue
+        cx = int(M["m10"] / M["m00"])
+        cy = int(M["m01"] / M["m00"])
+        centers.append((cx, cy))
+
+        bbox_cells = _cells_from_bounding_box(c, cell_w, cell_h, n)
+        if not bbox_cells:
+            row = _clip_index(int(cy / cell_h) if n else 0, n)
+            col = _clip_index(int(cx / cell_w) if n else 0, n)
+            bbox_cells = [(row, col)]
+
+        if max_cells_per_contour is not None:
+            bbox_cells = _limit_cells_near_center(bbox_cells, (cx, cy), cell_w, cell_h, max_cells_per_contour)
+
+        cells.extend(bbox_cells)
 
     cells = sorted(set(cells))
-    return mask, cells
+    return mask, cells, centers
+
+
+def _cells_from_bounding_box(contour, cell_w, cell_h, n):
+    if n <= 0:
+        return []
+    x, y, w, h = cv2.boundingRect(contour)
+    if w <= 0 or h <= 0:
+        return []
+
+    col_start = _clip_index(int(np.floor(x / cell_w)), n)
+    col_end = _clip_index(int(np.floor((x + w - 1) / cell_w)), n)
+    row_start = _clip_index(int(np.floor(y / cell_h)), n)
+    row_end = _clip_index(int(np.floor((y + h - 1) / cell_h)), n)
+
+    cells = []
+    for row in range(row_start, row_end + 1):
+        for col in range(col_start, col_end + 1):
+            cells.append((row, col))
+    return cells
+
+
+def _limit_cells_near_center(cells, center, cell_w, cell_h, limit):
+    if len(cells) <= limit:
+        return cells
+
+    cx, cy = center
+
+    def cell_distance(cell):
+        row, col = cell
+        cell_cx = (col + 0.5) * cell_w
+        cell_cy = (row + 0.5) * cell_h
+        return (cell_cx - cx) ** 2 + (cell_cy - cy) ** 2
+
+    sorted_cells = sorted(cells, key=cell_distance)
+    return sorted_cells[:limit]
+
+
+def _clip_index(idx, n):
+    if n <= 0:
+        return 0
+    return max(0, min(n - 1, idx))
 
 
 def draw_cells_on_warp(warp_img, cells, color):
@@ -249,3 +315,8 @@ def draw_cells_on_board(vis_img, H_inv, cells, color, warp_size):
         )
         pts = cv2.perspectiveTransform(quad[None, :, :], H_inv)[0]
         cv2.polylines(vis_img, [pts.astype(int)], True, color, 2)
+
+
+def draw_centers_on_warp(warp_img, centers, color):
+    for cx, cy in centers:
+        cv2.circle(warp_img, (int(cx), int(cy)), 6, color, 2)

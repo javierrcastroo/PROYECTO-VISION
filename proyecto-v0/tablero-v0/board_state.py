@@ -11,8 +11,8 @@ def init_board_state(name):
         "name": name,
         "last_quad": None,
         "miss": 0,
-        "tracked": {},
-        "next_id": 1,
+        "ship_two_cells": [],
+        "ship_one_cells": [],
     }
 
 

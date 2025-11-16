@@ -4,7 +4,6 @@ import numpy as np
 import board_tracker
 import object_tracker
 import board_ui
-import board_state
 
 
 def process_all_boards(frame, boards_state_list, cam_mtx=None, dist=None, max_boards=2, warp_size=500):
@@ -26,7 +25,20 @@ def process_all_boards(frame, boards_state_list, cam_mtx=None, dist=None, max_bo
     # asignar detecciones a slots por cercanía
     assignments = _assign_detections_to_slots(boards_found, boards_state_list)
 
-    obj_mask_show = None
+    frame_hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    ammo_pts, ammo_mask_show = object_tracker.detect_colored_points_global(
+        frame_hsv,
+        object_tracker.current_ammo_lower,
+        object_tracker.current_ammo_upper,
+        max_objs=12,
+        min_area=30,
+    )
+    for (cx, cy) in ammo_pts:
+        cv2.circle(vis_all, (cx, cy), 6, (255, 0, 255), -1)
+
+    ship_two_mask_show = None
+    ship_one_mask_show = None
+    layouts = []
 
     for slot_idx, slot in enumerate(boards_state_list):
         det_idx = assignments.get(slot_idx, None)
@@ -35,13 +47,22 @@ def process_all_boards(frame, boards_state_list, cam_mtx=None, dist=None, max_bo
             quad = binfo["quad"]
             slot["last_quad"] = quad
             slot["miss"] = 0
-            obj_mask_show = process_single_board(
+            ship_two_mask_show, ship_one_mask_show, layout_info = process_single_board(
                 vis_all, frame, quad, slot, warp_size
             )
+            if layout_info is not None:
+                layouts.append(layout_info)
         else:
             fallback_or_decay(slot, vis_all)
 
-    return vis_all, mask_board, obj_mask_show, None
+    return (
+        vis_all,
+        mask_board,
+        ship_two_mask_show,
+        ship_one_mask_show,
+        ammo_mask_show,
+        layouts,
+    )
 
 
 def _assign_detections_to_slots(boards_found, boards_state_list):
@@ -96,14 +117,10 @@ def process_single_board(vis_img, frame_bgr, quad, slot, warp_size=500):
     """
     Procesa SOLO un tablero:
     - aplanado
-    - detección de fichas dentro del tablero
-    - tracking
-    - transformación a coordenadas globales (cubo/pegatina verde)
-    - pintado en las dos ventanas
+    - detección de barcos por color
+    - pintado de las celdas ocupadas
     """
-    hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
 
-    # aplanar tablero
     src = np.array(quad, dtype=np.float32)
     dst = np.array(
         [
@@ -115,151 +132,42 @@ def process_single_board(vis_img, frame_bgr, quad, slot, warp_size=500):
         dtype=np.float32,
     )
     H_warp = cv2.getPerspectiveTransform(src, dst)
+    H_inv = cv2.getPerspectiveTransform(dst, src)
     warp_img = cv2.warpPerspective(frame_bgr, H_warp, (warp_size, warp_size))
+    warp_hsv = cv2.cvtColor(warp_img, cv2.COLOR_BGR2HSV)
 
-    # detectar fichas (color objeto) dentro del tablero
-    obj_pts, obj_mask = object_tracker.detect_colored_points_in_board(
-        hsv,
-        quad,
-        object_tracker.current_obj_lower,
-        object_tracker.current_obj_upper,
-        max_objs=4,
-        min_area=40,
+    ship_two_mask, ship_two_cells = detect_ship_cells(
+        warp_hsv,
+        object_tracker.current_ship_two_lower,
+        object_tracker.current_ship_two_upper,
+        min_ratio=0.12,
     )
 
-    # dibujar en la vista principal
-    for (cx, cy) in obj_pts:
-        cv2.circle(vis_img, (cx, cy), 6, (0, 0, 255), -1)
-
-    # tracking por tablero
-    slot["tracked"], slot["next_id"] = update_tracks(
-        slot["tracked"], obj_pts, slot["next_id"]
+    ship_one_mask, ship_one_cells = detect_ship_cells(
+        warp_hsv,
+        object_tracker.current_ship_one_lower,
+        object_tracker.current_ship_one_upper,
+        min_ratio=0.2,
     )
 
-    # si tenemos origen global (verde), pasamos todo a coordenadas globales
-    if board_state.GLOBAL_ORIGIN is not None and len(slot["tracked"]) > 0:
-        label_objects_global(vis_img, warp_img, H_warp, quad, slot)
+    slot["ship_two_cells"] = ship_two_cells
+    slot["ship_one_cells"] = ship_one_cells
 
-    # mostrar ventana del tablero aplanado
+    draw_cells_on_warp(warp_img, ship_two_cells, (0, 0, 255))
+    draw_cells_on_warp(warp_img, ship_one_cells, (0, 255, 255))
+    draw_cells_on_board(vis_img, H_inv, ship_two_cells, (0, 0, 255), warp_size)
+    draw_cells_on_board(vis_img, H_inv, ship_one_cells, (0, 255, 255), warp_size)
+
     cv2.imshow(f"{slot['name']} aplanado", warp_img)
 
-    return obj_mask
+    layout_info = {
+        "name": slot["name"],
+        "ship_two_cells": ship_two_cells,
+        "ship_one_cells": ship_one_cells,
+        "board_size": board_tracker.BOARD_SQUARES,
+    }
 
-
-def update_tracks(tracked, detections, next_id, max_dist=35, max_miss=10):
-    for oid in list(tracked.keys()):
-        tracked[oid]["updated"] = False
-
-    for (cx, cy) in detections:
-        best_oid = None
-        best_dist = 1e9
-        for oid, data in tracked.items():
-            px, py = data["pt"]
-            dist = ((cx - px) ** 2 + (cy - py) ** 2) ** 0.5
-            if dist < best_dist:
-                best_dist = dist
-                best_oid = oid
-        if best_oid is not None and best_dist < max_dist:
-            tracked[best_oid]["pt"] = (cx, cy)
-            tracked[best_oid]["miss"] = 0
-            tracked[best_oid]["updated"] = True
-        else:
-            tracked[next_id] = {"pt": (cx, cy), "miss": 0, "updated": True}
-            next_id += 1
-
-    # purgar
-    for oid in list(tracked.keys()):
-        if not tracked[oid].get("updated", False):
-            tracked[oid]["miss"] += 1
-        if tracked[oid]["miss"] > max_miss:
-            del tracked[oid]
-
-    return tracked, next_id
-
-
-def label_objects_global(vis_img, warp_img, H_warp, quad, slot):
-    """
-    Convierte las fichas del tablero a coordenadas globales (marcador verde).
-    OJO: el origen verde está FUERA del tablero, así que no lo pasamos por la homografía.
-    En vez de eso:
-      1) medimos distancias en píxeles
-      2) las convertimos a cm usando el tamaño físico del tablero
-    """
-    # 1. escala cm/píxel del tablero a partir de su altura en píxeles
-    # quad: [tl, tr, br, bl]
-    tl, tr, br, bl = quad
-    top_mid = (tl + tr) / 2.0
-    bot_mid = (bl + br) / 2.0
-    board_height_px = float(np.linalg.norm(top_mid - bot_mid))
-    board_height_cm = board_tracker.BOARD_SQUARES * board_tracker.SQUARE_SIZE_CM
-    if board_height_px < 1e-3:
-        return
-    cm_per_pix = board_height_cm / board_height_px
-
-    # 2. origen global en píxeles (en la imagen original)
-    gx_pix, gy_pix = board_state.GLOBAL_ORIGIN
-
-    # 3. para no pisar textos
-    y_off = 120 if slot["name"] == "T1" else 220
-
-    for oid, data in slot["tracked"].items():
-        obj_x_pix, obj_y_pix = data["pt"]
-
-        # 4. desplazamiento en píxeles entre origen global y el objeto
-        dx_pix = obj_x_pix - gx_pix
-        dy_pix = gy_pix - obj_y_pix   # invertimos Y para que "hacia abajo" sea positivo
-
-        # 5. pasamos a cm con la escala del tablero
-        dx_cm = dx_pix * cm_per_pix
-        dy_cm = dy_pix * cm_per_pix
-
-        # 6. convertir a casilla del tablero de este slot
-        cell_size = board_tracker.SQUARE_SIZE_CM
-        n_cells = board_tracker.BOARD_SQUARES
-
-        # ojo: aquí dx_cm / dy_cm son absolutas desde el origen, no desde la esquina del tablero
-        # para sacar la casilla sobre ESTE tablero, primero proyectamos el objeto por homografía
-        obj_x_warp, obj_y_warp = cv2.perspectiveTransform(
-            np.array([[[obj_x_pix, obj_y_pix]]], dtype=np.float32),
-            H_warp
-        )[0, 0]
-
-        col = int(obj_x_warp // cell_size)
-        row = int(obj_y_warp // cell_size)
-        col = max(0, min(n_cells - 1, col))
-        row = max(0, min(n_cells - 1, row))
-        cell_label = f"{chr(ord('A') + col)}{row + 1}"
-
-        # 7. pintar en la vista principal
-        cv2.putText(
-            vis_img,
-            f"{slot['name']}-O{oid}: {cell_label} ({dx_cm:.1f},{dy_cm:.1f})cm",
-            (10, y_off),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.45,
-            (0, 255, 255),
-            1,
-        )
-        y_off += 15
-
-        # 8. pintar también en la ventana aplanada
-        base_y = 25 + oid * 22
-        cv2.rectangle(warp_img, (10, base_y - 15), (310, base_y + 5), (0, 0, 0), -1)
-        cv2.putText(
-            warp_img,
-            f"O{oid}: {cell_label} ({dx_cm:.1f},{dy_cm:.1f})",
-            (15, base_y),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
-            (0, 255, 255),
-            1,
-            cv2.LINE_AA,
-        )
-
-        # 9. print por consola
-        print(
-            f"[{slot['name']}] O{oid} -> {cell_label} | Global ({dx_cm:.1f}, {dy_cm:.1f}) cm"
-        )
+    return ship_two_mask, ship_one_mask, layout_info
 
 
 def fallback_or_decay(slot, vis_img):
@@ -268,11 +176,8 @@ def fallback_or_decay(slot, vis_img):
         slot["miss"] += 1
     else:
         slot["miss"] += 1
-        # purgar tracking de ese tablero
-        for oid in list(slot["tracked"].keys()):
-            slot["tracked"][oid]["miss"] += 1
-            if slot["tracked"][oid]["miss"] > 15:
-                del slot["tracked"][oid]
+        slot["ship_two_cells"] = []
+        slot["ship_one_cells"] = []
 
 
 def draw_quad(img, quad, color=(0, 255, 255)):
@@ -280,3 +185,67 @@ def draw_quad(img, quad, color=(0, 255, 255)):
         return
     q = np.array(quad, dtype=np.int32)
     cv2.polylines(img, [q], True, color, 2)
+
+
+def detect_ship_cells(warp_hsv, lower, upper, min_ratio=0.15):
+    mask = cv2.inRange(warp_hsv, lower, upper)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8), iterations=1)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8), iterations=1)
+
+    n = board_tracker.BOARD_SQUARES
+    h, w = mask.shape[:2]
+    cell_w = w / n if n else w
+    cell_h = h / n if n else h
+
+    cells = []
+    for row in range(n):
+        for col in range(n):
+            x0 = int(col * cell_w)
+            x1 = int((col + 1) * cell_w)
+            y0 = int(row * cell_h)
+            y1 = int((row + 1) * cell_h)
+            roi = mask[y0:y1, x0:x1]
+            if roi.size == 0:
+                continue
+            ratio = cv2.countNonZero(roi) / float(roi.size)
+            if ratio >= min_ratio:
+                cells.append((row, col))
+
+    cells = sorted(set(cells))
+    return mask, cells
+
+
+def draw_cells_on_warp(warp_img, cells, color):
+    n = board_tracker.BOARD_SQUARES
+    h, w = warp_img.shape[:2]
+    cell_w = w / n if n else w
+    cell_h = h / n if n else h
+    for row, col in cells:
+        x0 = int(col * cell_w)
+        x1 = int((col + 1) * cell_w)
+        y0 = int(row * cell_h)
+        y1 = int((row + 1) * cell_h)
+        cv2.rectangle(warp_img, (x0, y0), (x1, y1), color, 2)
+
+
+def draw_cells_on_board(vis_img, H_inv, cells, color, warp_size):
+    if not cells:
+        return
+    n = board_tracker.BOARD_SQUARES
+    cell_w = warp_size / n if n else warp_size
+    for row, col in cells:
+        x0 = col * cell_w
+        x1 = (col + 1) * cell_w
+        y0 = row * cell_w
+        y1 = (row + 1) * cell_w
+        quad = np.array(
+            [
+                [x0, y0],
+                [x1, y0],
+                [x1, y1],
+                [x0, y1],
+            ],
+            dtype=np.float32,
+        )
+        pts = cv2.perspectiveTransform(quad[None, :, :], H_inv)[0]
+        cv2.polylines(vis_img, [pts.astype(int)], True, color, 2)

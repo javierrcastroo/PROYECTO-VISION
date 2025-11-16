@@ -7,7 +7,8 @@ from board_config import USE_UNDISTORT_BOARD, BOARD_CAMERA_PARAMS_PATH, WARP_SIZ
 import board_ui
 import board_state
 import board_processing as bp
-import aruco_utils  
+import aruco_utils
+import battleship_logic
 
 def main():
     cap = cv2.VideoCapture(1)
@@ -40,7 +41,7 @@ def main():
         aruco_utils.update_global_origin_from_aruco(frame, aruco_id=2)
 
         # procesar todos los tableros con el origen global actual
-        vis, mask_b, mask_o, _ = bp.process_all_boards(
+        vis, mask_b, mask_ship2, mask_ship1, mask_m, layouts = bp.process_all_boards(
             frame,
             boards_state_list,
             cam_mtx=mtx,
@@ -48,6 +49,17 @@ def main():
             max_boards=2,
             warp_size=WARP_SIZE,
         )
+
+        validation_map = {}
+        for layout in layouts:
+            ok, msg = battleship_logic.evaluate_board(layout)
+            validation_map[layout["name"]] = (ok, msg)
+            print(f"[{layout['name']}] {msg}")
+
+        for slot in boards_state_list:
+            if slot["name"] in validation_map and slot["last_quad"] is not None:
+                ok, msg = validation_map[slot["name"]]
+                board_ui.draw_validation_result(vis, slot["last_quad"], msg, ok)
 
         # dibujar el origen global si lo tenemos
         if board_state.GLOBAL_ORIGIN is not None:
@@ -68,8 +80,12 @@ def main():
         # mostrar
         cv2.imshow("Tablero", vis)
         cv2.imshow("Mascara tablero", mask_b)
-        if mask_o is not None:
-            cv2.imshow("Mascara objetos", mask_o)
+        if mask_ship2 is not None:
+            cv2.imshow("Mascara barco x2", mask_ship2)
+        if mask_ship1 is not None:
+            cv2.imshow("Mascara barco x1", mask_ship1)
+        if mask_m is not None:
+            cv2.imshow("Mascara municion", mask_m)
 
         key = cv2.waitKey(1) & 0xFF
         if key in (27, ord("q")):
@@ -84,7 +100,9 @@ def main():
 def handle_keys(key, frame):
    
     # b = color tablero
-    # o = color de las fichas
+    # 2 = barco de dos casillas
+    # 1 = barco de una casilla
+    # m = color de la munición
     import board_tracker
     import object_tracker
     import board_ui as bu
@@ -100,16 +118,38 @@ def handle_keys(key, frame):
         else:
             print("[WARN] dibuja ROI en 'Tablero' primero")
 
-    elif key == ord("o"):
+    elif key == ord("2"):
         if bu.board_roi_defined:
             x0, x1 = sorted([bu.bx_start, bu.bx_end])
             y0, y1 = sorted([bu.by_start, bu.by_end])
             roi_hsv = cv2.cvtColor(frame[y0:y1, x0:x1], cv2.COLOR_BGR2HSV)
-            lo, up = object_tracker.calibrate_object_color_from_roi(roi_hsv)
-            object_tracker.current_obj_lower, object_tracker.current_obj_upper = lo, up
-            print("[INFO] calibrado OBJETO:", lo, up)
+            lo, up = object_tracker.calibrate_ship_two_color_from_roi(roi_hsv)
+            object_tracker.current_ship_two_lower, object_tracker.current_ship_two_upper = lo, up
+            print("[INFO] calibrado BARCO x2:", lo, up)
         else:
-            print("[WARN] dibuja ROI sobre la ficha")
+            print("[WARN] dibuja ROI sobre el barco largo")
+
+    elif key == ord("1"):
+        if bu.board_roi_defined:
+            x0, x1 = sorted([bu.bx_start, bu.bx_end])
+            y0, y1 = sorted([bu.by_start, bu.by_end])
+            roi_hsv = cv2.cvtColor(frame[y0:y1, x0:x1], cv2.COLOR_BGR2HSV)
+            lo, up = object_tracker.calibrate_ship_one_color_from_roi(roi_hsv)
+            object_tracker.current_ship_one_lower, object_tracker.current_ship_one_upper = lo, up
+            print("[INFO] calibrado BARCO x1:", lo, up)
+        else:
+            print("[WARN] dibuja ROI sobre el barco corto")
+
+    elif key == ord("m"):
+        if bu.board_roi_defined:
+            x0, x1 = sorted([bu.bx_start, bu.bx_end])
+            y0, y1 = sorted([bu.by_start, bu.by_end])
+            roi_hsv = cv2.cvtColor(frame[y0:y1, x0:x1], cv2.COLOR_BGR2HSV)
+            lo, up = object_tracker.calibrate_ammo_color_from_roi(roi_hsv)
+            object_tracker.current_ammo_lower, object_tracker.current_ammo_upper = lo, up
+            print("[INFO] calibrada MUNICION:", lo, up)
+        else:
+            print("[WARN] dibuja ROI sobre la municion")
 
 
 

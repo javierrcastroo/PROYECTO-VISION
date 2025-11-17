@@ -12,7 +12,12 @@ from hand_config import (
 )
 
 import ui
-from segmentation import calibrate_from_roi, segment_hand_mask
+from segmentation import (
+    calibrate_from_roi,
+    segment_hand_mask,
+    apply_white_reference,
+    hsv_medians,
+)
 from features import compute_feature_vector
 from classifier import knn_predict
 from storage import save_gesture_example, load_gesture_gallery, save_sequence_json
@@ -70,6 +75,7 @@ def main():
 
     # estado
     lower_skin = upper_skin = None
+    white_ref = None
     gallery = load_gesture_gallery() if RECOGNIZE_MODE else []
     current_label = "2dedos"
     acciones = []
@@ -110,8 +116,11 @@ def main():
         # ROI
         ui.draw_roi_rectangle(vis)
 
-        # segmentar mano
-        mask = segment_hand_mask(hsv, lower_skin, upper_skin)
+        # ajustar HSV con referencia blanca (si existe) y segmentar mano
+        effective_lower, effective_upper, last_shift = apply_white_reference(
+            lower_skin, upper_skin, white_ref, hsv
+        )
+        mask = segment_hand_mask(hsv, effective_lower, effective_upper)
         ui.draw_hand_box(vis, mask)
         skin_only = cv2.bitwise_and(frame, frame, mask=mask)
 
@@ -131,7 +140,16 @@ def main():
         stable_label = majority_vote(list(recent_preds))
 
         # HUD
-        ui.draw_hud(vis, lower_skin, upper_skin, current_label)
+        ui.draw_hud(
+            vis,
+            lower_skin,
+            upper_skin,
+            current_label,
+            adjusted_lower=effective_lower,
+            adjusted_upper=effective_upper,
+            white_ref_ready=white_ref is not None,
+            shift_delta=last_shift,
+        )
         ui.draw_prediction(vis, stable_label, best_dist if best_dist else 0.0)
         ui.draw_sequence_status(
             vis,
@@ -218,6 +236,22 @@ def main():
                     print("[INFO] calibrado HSV mano:", lower_skin, upper_skin)
                 else:
                     print("[WARN] ROI muy pequeño")
+            else:
+                print("[WARN] dibuja un ROI en 'Mano' primero")
+
+        elif key == ord('b'):
+            if ui.roi_defined:
+                x0, x1 = sorted([ui.x_start, ui.x_end])
+                y0, y1 = sorted([ui.y_start, ui.y_end])
+                if (x1 - x0) > 5 and (y1 - y0) > 5:
+                    roi_hsv = hsv[y0:y1, x0:x1]
+                    white_ref = {
+                        "median": hsv_medians(roi_hsv),
+                        "roi": (x0, x1, y0, y1),
+                    }
+                    print("[INFO] calibrado blanco de referencia en ROI:", white_ref["median"])
+                else:
+                    print("[WARN] ROI muy pequeño para referencia blanca")
             else:
                 print("[WARN] dibuja un ROI en 'Mano' primero")
 

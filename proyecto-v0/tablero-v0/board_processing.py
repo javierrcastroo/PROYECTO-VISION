@@ -134,6 +134,7 @@ def process_single_board(vis_img, frame_bgr, quad, slot, warp_size=500):
         dtype=np.float32,
     )
     H_warp = cv2.getPerspectiveTransform(src, dst)
+    H_inv = cv2.getPerspectiveTransform(dst, src)
     warp_img = cv2.warpPerspective(frame_bgr, H_warp, (warp_size, warp_size))
 
     ship_two_pts, ship_two_mask = object_tracker.detect_colored_points_in_board(

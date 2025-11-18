@@ -15,8 +15,6 @@ import ui
 from segmentation import (
     calibrate_from_roi,
     segment_hand_mask,
-    apply_white_reference,
-    hsv_medians,
 )
 from features import compute_feature_vector
 from classifier import knn_predict
@@ -116,11 +114,8 @@ def main():
         # ROI
         ui.draw_roi_rectangle(vis)
 
-        # ajustar HSV con referencia blanca (si existe) y segmentar mano
-        effective_lower, effective_upper, last_shift = apply_white_reference(
-            lower_skin, upper_skin, white_ref, hsv
-        )
-        mask = segment_hand_mask(hsv, effective_lower, effective_upper)
+        # segmentar mano con el HSV calibrado
+        mask = segment_hand_mask(hsv, lower_skin, upper_skin)
         ui.draw_hand_box(vis, mask)
         skin_only = cv2.bitwise_and(frame, frame, mask=mask)
 
@@ -145,10 +140,6 @@ def main():
             lower_skin,
             upper_skin,
             current_label,
-            adjusted_lower=effective_lower,
-            adjusted_upper=effective_upper,
-            white_ref_ready=white_ref is not None,
-            shift_delta=last_shift,
         )
         ui.draw_prediction(vis, stable_label, best_dist if best_dist else 0.0)
         ui.draw_sequence_status(

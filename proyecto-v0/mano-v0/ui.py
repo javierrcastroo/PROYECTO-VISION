@@ -27,10 +27,8 @@ def draw_roi_rectangle(img):
                       (x_end, y_end),
                       (0, 255, 255), 2)
 
-def draw_hud(img, lower_skin, upper_skin, current_label,
-             adjusted_lower=None, adjusted_upper=None,
-             white_ref_ready=False, shift_delta=(0, 0, 0)):
-    hud = "ROI: arrastra | 'b' calib blanco | 'c' calib mano | 'g' guarda muestra | 'q' salir"
+def draw_hud(img, lower_skin, upper_skin, current_label):
+    hud = "ROI: arrastra | 'c' calib mano | 'g' guarda muestra | 'q' salir"
     cv2.putText(img, hud, (10, 20),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                 (255, 255, 255), 1, cv2.LINE_AA)
@@ -39,20 +37,12 @@ def draw_hud(img, lower_skin, upper_skin, current_label,
                 (180, 255, 180), 1, cv2.LINE_AA)
 
     if lower_skin is not None and upper_skin is not None:
-        base_txt = f"Base HSV low:{tuple(int(v) for v in lower_skin)} up:{tuple(int(v) for v in upper_skin)}"
+        base_txt = f"HSV low:{tuple(int(v) for v in lower_skin)} up:{tuple(int(v) for v in upper_skin)}"
         cv2.putText(img,
                     base_txt,
-                    (10, img.shape[0] - 25),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45,
-                    (180, 200, 255), 1, cv2.LINE_AA)
-
-    if adjusted_lower is not None and adjusted_upper is not None:
-        adj_txt = f"Ajustado HSV low:{tuple(int(v) for v in adjusted_lower)} up:{tuple(int(v) for v in adjusted_upper)}"
-        cv2.putText(img,
-                    adj_txt,
                     (10, img.shape[0] - 10),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45,
-                    (180, 255, 180), 1, cv2.LINE_AA)
+                    (180, 200, 255), 1, cv2.LINE_AA)
 
     if white_ref_ready:
         cv2.putText(img,

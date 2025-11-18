@@ -73,6 +73,7 @@ def main():
 
     # estado
     lower_skin = upper_skin = None
+    white_ref = None
     gallery = load_gesture_gallery() if RECOGNIZE_MODE else []
     current_label = "2dedos"
     acciones = []
@@ -226,6 +227,22 @@ def main():
                     print("[INFO] calibrado HSV mano:", lower_skin, upper_skin)
                 else:
                     print("[WARN] ROI muy pequeño")
+            else:
+                print("[WARN] dibuja un ROI en 'Mano' primero")
+
+        elif key == ord('b'):
+            if ui.roi_defined:
+                x0, x1 = sorted([ui.x_start, ui.x_end])
+                y0, y1 = sorted([ui.y_start, ui.y_end])
+                if (x1 - x0) > 5 and (y1 - y0) > 5:
+                    roi_hsv = hsv[y0:y1, x0:x1]
+                    white_ref = {
+                        "median": hsv_medians(roi_hsv),
+                        "roi": (x0, x1, y0, y1),
+                    }
+                    print("[INFO] calibrado blanco de referencia en ROI:", white_ref["median"])
+                else:
+                    print("[WARN] ROI muy pequeño para referencia blanca")
             else:
                 print("[WARN] dibuja un ROI en 'Mano' primero")
 

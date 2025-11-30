@@ -1,0 +1,82 @@
+% Resumen del flujo de hand_main.py en pseudocódigo LaTeX
+\documentclass{article}
+\usepackage[spanish]{babel}
+\usepackage{algorithm2e}
+\begin{document}
+\begin{algorithm}[H]
+\SetAlgoLined
+\SetKwFunction{Calibrate}{calibrate\_from\_roi}
+\SetKwFunction{Segment}{segment\_hand\_mask}
+\SetKwFunction{Features}{compute\_feature\_vector}
+\SetKwFunction{Predict}{knn\_predict}
+\SetKwFunction{Save}{save\_gesture\_example}
+\SetKwFunction{Load}{load\_gesture\_gallery}
+\SetKwFunction{SaveSeq}{save\_sequence\_json}
+\KwData{Cámara de la mano (ID 0); parámetros opcionales de calibración intrínseca.}
+\KwResult{Captura, reconocimiento y registro de gestos de mano.}
+\BlankLine
+\tcp{Inicialización}
+abrir cámara 0; cargar matriz/distorsión si existe y activar undistort\;
+buffer $recent\_preds \leftarrow$ cola circular de 7 etiquetas; $gallery \leftarrow \Load()$ si está activo modo reconocimiento\;
+$lower\_skin, upper\_skin \leftarrow \bot$; $current\_label \leftarrow$ ``2dedos''\;
+$gesture\_window \leftarrow$ ventana de votación de $150$ frames; $capture\_state \leftarrow$ ``STANDBY''\;
+configurar ventana ``Mano'' y callback de ratón para ROI\;
+\BlankLine
+\tcp{Bucle principal por frame}
+\While{ventana abierta y cámara entrega frame}{
+    leer $frame$; si hay intrínsecos, aplicar \texttt{undistort}\;
+    voltear horizontalmente y redimensionar a $(PREVIEW\_W, PREVIEW\_H)$\;
+    $hsv \leftarrow$ convertir $frame$ a HSV\;
+    dibujar ROI activa en visualización\;
+    $mask \leftarrow \Segment(hsv, lower\_skin, upper\_skin)$\;
+    dibujar caja mínima del contorno de $mask$; $skin\_only \leftarrow frame \land mask$\;
+    $feat \leftarrow \Features(mask)$\;
+    $per\_frame\_label \leftarrow \bot$; $best\_dist \leftarrow \bot$\;
+    \If{$feat \neq \bot$ y modo reconocimiento activo}{
+        $(lbl, dist) \leftarrow \Predict(feat, gallery, k=5)$\;
+        \If{$lbl \neq \bot$ y $dist \le CONFIDENCE\_THRESHOLD$}{
+            $per\_frame\_label \leftarrow lbl$; $best\_dist \leftarrow dist$\;
+        }
+    }
+    \If{$per\_frame\_label \neq \bot$}{agregar a $recent\_preds$}\;
+    $stable \leftarrow$ voto mayoritario de $recent\_preds$\;
+    dibujar HUD (umbrales HSV, etiqueta actual, $stable$, $best\_dist$, progreso de captura)\;
+    mostrar ventanas ``Mano'', ``Mascara mano'' y ``Solo piel mano''\;
+    $key \leftarrow$ \texttt{waitKey}(1)\;
+    \If{$key$ es Esc o q}{salir del bucle}\;
+    $resolved \leftarrow gesture\_window.push(stable)$\;
+    \tcp{Máquina de estados controlada por gestos}
+    \Switch{$capture\_state$}{
+        \Case{``STANDBY''}{
+            si $resolved \in$ \{``demond``, ``demonio''\} $\Rightarrow$ pasar a ``CAPTURA''; en otro caso, mostrar ayuda.
+        }
+        \Case{``CAPTURA''}{
+            si $resolved$ es desconocido o de control $\Rightarrow$ pedir repetir; en otro caso $pending\_candidate \leftarrow resolved$ y pasar a ``CONFIRMACION''.
+        }
+        \Case{``CONFIRMACION''}{
+            si $resolved$ == ``ok'' y hay candidato $\Rightarrow$ añadir a lista $acciones$;\
+            si longitud de $acciones$ == $MAX\_SEQUENCE\_LENGTH$ pasar a ``COOL'', si no volver a ``CAPTURA'';\
+            si $resolved$ == ``nook'' $\Rightarrow$ rechazar candidato y volver a ``CAPTURA'';\
+            otro caso: mostrar mensaje de error.
+        }
+        \Case{``COOL''}{
+            si $resolved$ == ``cool'' y $|acciones| == MAX\_SEQUENCE\_LENGTH$ $\Rightarrow$ imprimir/se r\'apida secuencia con \SaveSeq, limpiar estado y volver a ``STANDBY''; en otro caso, recordar que falta ``cool''.
+        }
+    }
+    \BlankLine
+    \tcp{Controles de teclado}
+    \If{$key$ == c}{
+        si ROI definida y suficientemente grande $\Rightarrow (lower\_skin, upper\_skin) \leftarrow \Calibrate(ROI\_hsv)$; otro caso: avisar.
+    }
+    \If{$key$ == b}{
+        si ROI definida $\Rightarrow$ guardar mediana HSV como referencia blanca (\texttt{white\_ref}).
+    }
+    \If{$key$ == g}{
+        si $feat \neq \bot$ $\Rightarrow \Save(feat, current\_label)$ y añadir a $gallery$ si está activo reconocimiento.
+    }
+    \If{$key$ en \{0,1,2,3,4,5,d,p,-,n\}}{actualizar $current\_label$ según mapeo (0--5 dedos, demonio, ok, cool, nook).}
+}
+liberar cámara y destruir ventanas\;
+\caption{Pseudocódigo de alto nivel de \texttt{hand\_main.py}.}
+\end{algorithm}
+\end{document}

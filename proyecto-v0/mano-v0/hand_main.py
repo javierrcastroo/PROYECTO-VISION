@@ -25,7 +25,7 @@ from collections import deque
 
 GESTURE_WINDOW_FRAMES = 150
 MAX_SEQUENCE_LENGTH = 2
-TRIGGER_GESTURES = {"demond", "demonio"}
+TRIGGER_GESTURES = {"5dedos"}
 CONFIRM_GESTURE = "ok"
 REJECT_GESTURE = "nook"
 PRINT_GESTURE = "cool"
@@ -77,7 +77,6 @@ def main():
 
     # estado
     lower_skin = upper_skin = None
-    white_ref = None
     gallery = load_gesture_gallery() if RECOGNIZE_MODE else []
     current_label = "2dedos"
     acciones = []
@@ -212,7 +211,7 @@ def main():
                 if resolved_label in TRIGGER_GESTURES:
                     set_state("CAPTURA", ["Sistema activo: muestra el primer gesto."])
                 else:
-                    set_status(["Sigue en standby, haz 'demond' para comenzar."])
+                    set_status(["Sigue en standby, haz '5dedos' para comenzar."])
 
             elif capture_state == "CAPTURA":
                 if resolved_label == "????" or resolved_label in CONTROL_GESTURES:
@@ -255,7 +254,7 @@ def main():
                     pending_candidate = None
                     set_state(
                         "STANDBY",
-                        ["Standby: haz 'demond' para activar un nuevo registro."],
+                        ["Standby: haz '5dedos' para activar un nuevo registro."],
                     )
                 else:
                     set_status(["Secuencia lista. Usa 'cool' para imprimirla."])
@@ -275,22 +274,6 @@ def main():
             else:
                 print("[WARN] dibuja un ROI en 'Mano' primero")
 
-        elif key == ord('b'):
-            if ui.roi_defined:
-                x0, x1 = sorted([ui.x_start, ui.x_end])
-                y0, y1 = sorted([ui.y_start, ui.y_end])
-                if (x1 - x0) > 5 and (y1 - y0) > 5:
-                    roi_hsv = hsv[y0:y1, x0:x1]
-                    white_ref = {
-                        "median": hsv_medians(roi_hsv),
-                        "roi": (x0, x1, y0, y1),
-                    }
-                    print("[INFO] calibrado blanco de referencia en ROI:", white_ref["median"])
-                else:
-                    print("[WARN] ROI muy pequeño para referencia blanca")
-            else:
-                print("[WARN] dibuja un ROI en 'Mano' primero")
-
         elif key == ord('g'):
             if feat_vec is not None:
                 save_gesture_example(feat_vec, current_label)
@@ -307,7 +290,6 @@ def main():
             ord('3'),
             ord('4'),
             ord('5'),
-            ord('d'),
             ord('p'),
             ord('-'),
             ord('n'),
@@ -319,7 +301,6 @@ def main():
                 ord('3'): "3dedos",
                 ord('4'): "4dedos",
                 ord('5'): "5dedos",
-                ord('d'): "demonio",
                 ord('p'): "ok",
                 ord('-'): "cool",
                 ord('n'): "nook",

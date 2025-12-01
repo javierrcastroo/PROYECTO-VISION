@@ -2,8 +2,115 @@
 
 BOARD_LABELS = ["A", "B", "C", "D", "E"]
 
+# distribuciones capturadas para inicializar la partida
+INITIAL_BOARD_LAYOUTS = {}
+CELL_NOT_ATTACKED = "no_atacada"
+CELL_MISS = "atacada_agua"
+CELL_HIT = "tocado"
+CELL_SUNK = "hundido"
+
+
+def init_game_state(layout):
+    """
+    Construye un estado de partida a partir del layout detectado.
+
+    La estructura devuelta mantiene el estado por casilla y la información de
+    cada barco para poder actualizarlo cuando se produzcan ataques.
+    """
+
+    def _ship_from_cells(cells):
+        return {
+            "cells": [tuple(c) for c in cells],
+            "hits": set(),
+            "sunk": False,
+        }
+
+    ships = []
+    if layout.get("ship_two_cells"):
+        ships.append(_ship_from_cells(layout["ship_two_cells"]))
+
+    for cell in layout.get("ship_one_cells", []):
+        ships.append(_ship_from_cells([cell]))
+
+    return {
+        "board_size": layout.get("board_size"),
+        "ships": ships,
+        "cell_state": {},
+        "turn": 0,
+        "attacks": 0,
+        "hits": 0,
+        "sunk_ships": 0,
+        "game_over": False,
+    }
+
+
+def apply_attack(state, cell):
+    """
+    Aplica un ataque a la ``cell`` (fila, columna) indicada.
+
+    Devuelve una tupla ``(resultado, fin)`` donde ``resultado`` puede ser uno
+    de ``"agua"``, ``"tocado"``, ``"hundido"`` o ``"invalido"`` y ``fin``
+    indica si la partida ha terminado.
+    """
+
+    cell = tuple(cell)
+    current_state = state["cell_state"].get(cell, CELL_NOT_ATTACKED)
+    if current_state in (CELL_MISS, CELL_HIT, CELL_SUNK):
+        return "invalido", state.get("game_over", False)
+
+    result = "agua"
+    target_ship = _find_ship(state["ships"], cell)
+    if target_ship is not None:
+        target_ship["hits"].add(cell)
+        state["hits"] += 1
+        if len(target_ship["hits"]) == len(target_ship["cells"]):
+            target_ship["sunk"] = True
+            state["sunk_ships"] += 1
+            for part in target_ship["cells"]:
+                state["cell_state"][part] = CELL_SUNK
+            result = "hundido"
+        else:
+            state["cell_state"][cell] = CELL_HIT
+            result = "tocado"
+    else:
+        state["cell_state"][cell] = CELL_MISS
+
+    state["attacks"] += 1
+    state["turn"] += 1
+
+    if state["sunk_ships"] == len(state["ships"]):
+        state["game_over"] = True
+
+    return result, state["game_over"]
+
+
+def _find_ship(ships, cell):
+    for ship in ships:
+        if cell in ship["cells"]:
+            return ship
+    return None
+
 def _cells_adjacent(a, b):
     return max(abs(a[0] - b[0]), abs(a[1] - b[1])) <= 1
+
+
+def _normalize_cell(cell):
+    try:
+        row = int(cell[0])
+    except (TypeError, ValueError, IndexError):
+        row = cell[0]
+    try:
+        col = int(cell[1])
+    except (TypeError, ValueError, IndexError):
+        col = cell[1]
+    return (row, col)
+
+
+def _format_cell_label(cell):
+    row, col = _normalize_cell(cell)
+    if isinstance(row, int) and isinstance(col, int):
+        return f"{chr(ord('A') + col)}{row + 1}"
+    return f"{row},{col}"
 
 
 def evaluate_board(layout):

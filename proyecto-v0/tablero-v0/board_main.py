@@ -32,6 +32,10 @@ def main():
     cv2.namedWindow("Tablero")
     cv2.setMouseCallback("Tablero", board_ui.board_mouse_callback)
 
+    # textos iniciales de estado
+    board_ui.set_game_state("standby")
+    board_ui.set_attack_result(None)
+
     while True:
         ok, frame = cap.read()
         if not ok:
@@ -76,6 +80,7 @@ def main():
             )
 
         board_ui.draw_board_hud(vis)
+        board_ui.draw_state_status(vis)
 
         # mostrar
         cv2.imshow("Tablero", vis)

@@ -23,11 +23,30 @@ from collections import deque
 
 GESTURE_WINDOW_FRAMES = 150
 MAX_SEQUENCE_LENGTH = 2
-TRIGGER_GESTURES = {"demond", "demonio"}
+TRIGGER_GESTURES = {"5dedos"}
 CONFIRM_GESTURE = "ok"
 REJECT_GESTURE = "nook"
 PRINT_GESTURE = "cool"
 CONTROL_GESTURES = TRIGGER_GESTURES | {CONFIRM_GESTURE, REJECT_GESTURE, PRINT_GESTURE}
+
+COORD_MAP = {
+    "0dedos": 0,
+    "1dedo": 1,
+    "2dedos": 2,
+    "3dedos": 3,
+    "4dedos": 4,
+}
+
+
+def sequence_to_coord(seq):
+    if len(seq) != 2:
+        return None
+    col_label, row_label = seq
+    if col_label not in COORD_MAP or row_label not in COORD_MAP:
+        return None
+    col = COORD_MAP[col_label]
+    row = COORD_MAP[row_label]
+    return row, col
 
 
 def majority_vote(labels):
@@ -62,7 +81,7 @@ class GestureWindow:
 def main():
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
-        raise RuntimeError("No se pudo abrir la cámara 0 (mano)")
+        raise RuntimeError("No se pudo abrir la camara 0 (mano)")
 
     HAND_CAM_MTX = HAND_DIST = None
     if USE_UNDISTORT_HAND and os.path.exists(HAND_CAMERA_PARAMS_PATH):
@@ -73,7 +92,6 @@ def main():
 
     # estado
     lower_skin = upper_skin = None
-    white_ref = None
     gallery = load_gesture_gallery() if RECOGNIZE_MODE else []
     current_label = "2dedos"
     acciones = []
@@ -81,7 +99,9 @@ def main():
     capture_state = "STANDBY"
     pending_candidate = None
     gesture_window = GestureWindow()
-    status_lines = ["Standby: haz 'demond' para activar el registro."]
+    status_lines = ["Standby: haz '5dedos' para activar el registro."]
+    current_target_board = "T2"
+    attack_counters = {"T1": 0, "T2": 0}
 
     def set_state(new_state, lines):
         nonlocal capture_state, status_lines
@@ -168,17 +188,17 @@ def main():
                 if resolved_label in TRIGGER_GESTURES:
                     set_state("CAPTURA", ["Sistema activo: muestra el primer gesto."])
                 else:
-                    set_status(["Sigue en standby, haz 'demond' para comenzar."])
+                    set_status(["Sigue en standby, haz '5dedos' para comenzar."])
 
             elif capture_state == "CAPTURA":
                 if resolved_label == "????" or resolved_label in CONTROL_GESTURES:
-                    set_status(["Gesto no válido, repítelo."])
+                    set_status(["Gesto no valido, repitelo."])
                 else:
                     pending_candidate = resolved_label
                     set_state(
                         "CONFIRMACION",
                         [
-                            f"¿Tu gesto es '{pending_candidate}'?",
+                            f"Tu gesto es '{pending_candidate}'?",
                             "Confirma con 'ok' o repite con 'nook'.",
                         ],
                     )
@@ -186,7 +206,7 @@ def main():
             elif capture_state == "CONFIRMACION":
                 if resolved_label == CONFIRM_GESTURE and pending_candidate:
                     acciones.append(pending_candidate)
-                    print(f"[INFO] Añadido gesto confirmado: {pending_candidate}")
+                    print(f"[INFO] Aniadido gesto confirmado: {pending_candidate}")
                     pending_candidate = None
                     if len(acciones) >= MAX_SEQUENCE_LENGTH:
                         set_state(
@@ -204,14 +224,33 @@ def main():
 
             elif capture_state == "COOL":
                 if resolved_label == PRINT_GESTURE and len(acciones) == MAX_SEQUENCE_LENGTH:
-                    print("[INFO] Secuencia final:", acciones)
-                    save_sequence_json(acciones)
-                    acciones.clear()
-                    pending_candidate = None
-                    set_state(
-                        "STANDBY",
-                        ["Standby: haz 'demond' para activar un nuevo registro."],
-                    )
+                    coord = sequence_to_coord(acciones)
+                    if coord is None:
+                        set_status([
+                            "Secuencia invalida para coordenada (usa 0-4 dedos).",
+                            "Repite los dos gestos de columna y fila.",
+                        ])
+                    else:
+                        row, col = coord
+                        attack_counters[current_target_board] += 1
+                        shot_num = attack_counters[current_target_board]
+                        print("[INFO] Secuencia final:", acciones)
+                        save_sequence_json(
+                            acciones,
+                            target_name=current_target_board,
+                            shot_number=shot_num,
+                            row=row,
+                            col=col,
+                        )
+                        acciones.clear()
+                        pending_candidate = None
+                        set_state(
+                            "STANDBY",
+                            [
+                                "Standby: haz '5dedos' para activar un nuevo registro.",
+                                f"Objetivo actual: {current_target_board}",
+                            ],
+                        )
                 else:
                     set_status(["Secuencia lista. Usa 'cool' para imprimirla."])
 
@@ -226,23 +265,7 @@ def main():
                     lower_skin, upper_skin = calibrate_from_roi(roi_hsv)
                     print("[INFO] calibrado HSV mano:", lower_skin, upper_skin)
                 else:
-                    print("[WARN] ROI muy pequeño")
-            else:
-                print("[WARN] dibuja un ROI en 'Mano' primero")
-
-        elif key == ord('b'):
-            if ui.roi_defined:
-                x0, x1 = sorted([ui.x_start, ui.x_end])
-                y0, y1 = sorted([ui.y_start, ui.y_end])
-                if (x1 - x0) > 5 and (y1 - y0) > 5:
-                    roi_hsv = hsv[y0:y1, x0:x1]
-                    white_ref = {
-                        "median": hsv_medians(roi_hsv),
-                        "roi": (x0, x1, y0, y1),
-                    }
-                    print("[INFO] calibrado blanco de referencia en ROI:", white_ref["median"])
-                else:
-                    print("[WARN] ROI muy pequeño para referencia blanca")
+                    print("[WARN] ROI muy pequeno")
             else:
                 print("[WARN] dibuja un ROI en 'Mano' primero")
 
@@ -253,7 +276,7 @@ def main():
                     gallery.append((feat_vec, current_label))
                 print(f"[INFO] guardado gesto {current_label}")
             else:
-                print("[WARN] no hay gesto válido")
+                print("[WARN] no hay gesto valido")
 
         elif key in (
             ord('0'),
@@ -262,7 +285,6 @@ def main():
             ord('3'),
             ord('4'),
             ord('5'),
-            ord('d'),
             ord('p'),
             ord('-'),
             ord('n'),
@@ -274,12 +296,18 @@ def main():
                 ord('3'): "3dedos",
                 ord('4'): "4dedos",
                 ord('5'): "5dedos",
-                ord('d'): "demonio",
                 ord('p'): "ok",
                 ord('-'): "cool",
                 ord('n'): "nook",
             }
             current_label = mapping[key]
+
+        elif key == ord('t'):
+            current_target_board = "T1" if current_target_board == "T2" else "T2"
+            set_status([
+                f"Objetivo alternado a {current_target_board}",
+                "Standby: haz '5dedos' para activar el registro.",
+            ])
 
     cap.release()
     cv2.destroyAllWindows()

@@ -1,6 +1,8 @@
 # board_main.py
 import cv2
 import os
+import json
+import glob
 import numpy as np
 
 from board_config import USE_UNDISTORT_BOARD, BOARD_CAMERA_PARAMS_PATH, WARP_SIZE
@@ -10,12 +12,15 @@ import board_processing as bp
 import aruco_utils
 import battleship_logic
 
+ATTACKS_DIR = "gestures"
+CAPTURE_FRAMES = 150
+
 def main():
     cap = cv2.VideoCapture(1)
     if not cap.isOpened():
-        raise RuntimeError("No se pudo abrir la cámara 1 (tablero)")
+        raise RuntimeError("No se pudo abrir la camara 1 (tablero)")
 
-    # cargar calibración de cámara
+    # cargar calibracion de camara
     mtx = dist = None
     if USE_UNDISTORT_BOARD and os.path.exists(BOARD_CAMERA_PARAMS_PATH):
         data = np.load(BOARD_CAMERA_PARAMS_PATH)
@@ -31,6 +36,19 @@ def main():
 
     cv2.namedWindow("Tablero")
     cv2.setMouseCallback("Tablero", board_ui.board_mouse_callback)
+
+    os.makedirs(ATTACKS_DIR, exist_ok=True)
+
+    status = "STANDBY"  # STANDBY -> CAPTURING -> PLAYING
+    capture_frames_left = 0
+    accumulation = {"T1": [], "T2": []}
+    stabilized_layouts = None
+    game_state = None
+    processed_attacks = set()
+    status_lines = [
+        "Standby: coloca barcos y calibra HSV",
+        f"Pulsa 's' para fijar el layout ({CAPTURE_FRAMES} frames)",
+    ]
 
     while True:
         ok, frame = cap.read()
@@ -56,6 +74,23 @@ def main():
             validation_map[layout["name"]] = (ok, msg)
             print(f"[{layout['name']}] {msg}")
 
+        if status == "CAPTURING":
+            _accumulate_layouts(layouts, accumulation)
+
+        if status == "CAPTURING":
+            capture_frames_left -= 1
+            status_lines = [
+                f"Capturando layout estable ({capture_frames_left} frames restantes)",
+            ]
+            if capture_frames_left <= 0:
+                stabilized_layouts = _select_stable_layouts(accumulation, boards_state_list)
+                game_state = battleship_logic.init_game_state(stabilized_layouts)
+                status = "PLAYING"
+                status_lines = [
+                    "Layouts fijados. Empieza la partida.",
+                    "Turno inicial: T1 ataca T2",
+                ]
+
         for slot in boards_state_list:
             if slot["name"] in validation_map and slot["last_quad"] is not None:
                 ok, msg = validation_map[slot["name"]]
@@ -75,7 +110,22 @@ def main():
                 2,
             )
 
+        if status == "PLAYING" and game_state is not None:
+            if not game_state.get("finished"):
+                status_lines = [
+                    f"Turno de ataque: {game_state['current_attacker']} -> {game_state['current_defender']}",
+                ]
+            else:
+                status_lines = [
+                    f"Partida terminada. Ganador: {game_state.get('winner')}",
+                ]
+
+            pending_msg = _process_new_attacks(game_state, processed_attacks)
+            if pending_msg:
+                status_lines = pending_msg
+
         board_ui.draw_board_hud(vis)
+        _draw_status_lines(vis, status_lines)
 
         # mostrar
         cv2.imshow("Tablero", vis)
@@ -91,7 +141,15 @@ def main():
         if key in (27, ord("q")):
             break
 
-        handle_keys(key, frame)
+        if key == ord("s") and status == "STANDBY":
+            capture_frames_left = CAPTURE_FRAMES
+            accumulation = {"T1": [], "T2": []}
+            status = "CAPTURING"
+            status_lines = [
+                f"Inicio de captura de layout durante {CAPTURE_FRAMES} frames",
+            ]
+        else:
+            handle_keys(key, frame)
 
     cap.release()
     cv2.destroyAllWindows()
@@ -152,6 +210,127 @@ def handle_keys(key, frame):
             print("[WARN] dibuja ROI sobre la municion")
 
 
+
+def _snapshot_layout(layout):
+    return {
+        "ship_two_cells": tuple(sorted(layout.get("ship_two_cells", []))),
+        "ship_one_cells": tuple(sorted(layout.get("ship_one_cells", []))),
+        "board_size": layout.get("board_size", 5),
+    }
+
+
+def _accumulate_layouts(layouts, accumulation):
+    for layout in layouts:
+        name = layout.get("name")
+        if name not in accumulation:
+            accumulation[name] = []
+        accumulation[name].append(_snapshot_layout(layout))
+
+
+def _select_stable_layouts(samples_map, boards_state_list):
+    stable = {}
+    for slot in boards_state_list:
+        name = slot["name"]
+        samples = samples_map.get(name, [])
+        if not samples:
+            stable[name] = {
+                "ship_two_cells": [],
+                "ship_one_cells": [],
+                "board_size": 5,
+            }
+            continue
+
+        # elegir el layout mas repetido
+        counts = {}
+        for snap in samples:
+            key = (snap["ship_two_cells"], snap["ship_one_cells"])
+            counts[key] = counts.get(key, 0) + 1
+
+        best_key = max(counts.items(), key=lambda kv: kv[1])[0]
+        stable[name] = {
+            "ship_two_cells": list(best_key[0]),
+            "ship_one_cells": list(best_key[1]),
+            "board_size": samples[0].get("board_size", 5),
+        }
+    return stable
+
+
+def _draw_status_lines(vis, lines):
+    if not lines:
+        return
+    y = 30
+    for line in lines:
+        cv2.putText(
+            vis,
+            line,
+            (10, y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (255, 255, 255),
+            1,
+        )
+        y += 20
+
+
+def _process_new_attacks(game_state, processed_attacks):
+    msgs = None
+    files = sorted(glob.glob(os.path.join(ATTACKS_DIR, "T*_*.json")))
+    for fp in files:
+        fname = os.path.basename(fp)
+        if fname in processed_attacks:
+            continue
+        try:
+            with open(fp, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[WARN] no se pudo leer {fname}: {exc}")
+            processed_attacks.add(fname)
+            continue
+
+        target = payload.get("target")
+        row = payload.get("row")
+        col = payload.get("col")
+        if target is None or row is None or col is None:
+            print(f"[WARN] ataque {fname} incompleto")
+            processed_attacks.add(fname)
+            continue
+
+        result = battleship_logic.apply_attack(game_state, target, row, col)
+        processed_attacks.add(fname)
+
+        msgs = _format_attack_result(result)
+
+        try:
+            os.remove(fp)
+        except OSError:
+            pass
+    return msgs
+
+
+def _format_attack_result(result):
+    if result is None:
+        return None
+
+    status = result.get("status")
+    attacker = result.get("attacker")
+    defender = result.get("defender")
+    cell_label = result.get("cell")
+
+    if status == "wrong_target":
+        return [f"Turno de {attacker}, se esperaba ataque a {defender}"]
+    if status == "invalid":
+        return [f"Casilla {cell_label} ya usada, repite el disparo"]
+    if status == "agua":
+        return [f"{attacker} dispara a {defender} en {cell_label}: AGUA", "Cambio de turno"]
+    if status == "tocado":
+        return [f"{attacker} dispara a {defender} en {cell_label}: TOCADO", "Sigue el mismo turno"]
+    if status == "hundido":
+        extra = "Fin de partida" if result.get("winner") else "Sigue el mismo turno"
+        return [f"{attacker} hunde barco en {cell_label} de {defender}", extra]
+    if status == "finished":
+        winner = result.get("winner")
+        return [f"Partida terminada. Ganador: {winner}"]
+    return ["Ataque procesado"]
 
 if __name__ == "__main__":
     main()

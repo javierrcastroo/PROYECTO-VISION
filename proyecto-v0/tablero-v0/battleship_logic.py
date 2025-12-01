@@ -6,6 +6,25 @@ def _cells_adjacent(a, b):
     return max(abs(a[0] - b[0]), abs(a[1] - b[1])) <= 1
 
 
+def _normalize_cell(cell):
+    try:
+        row = int(cell[0])
+    except (TypeError, ValueError, IndexError):
+        row = cell[0]
+    try:
+        col = int(cell[1])
+    except (TypeError, ValueError, IndexError):
+        col = cell[1]
+    return (row, col)
+
+
+def _format_cell_label(cell):
+    row, col = _normalize_cell(cell)
+    if isinstance(row, int) and isinstance(col, int):
+        return f"{chr(ord('A') + col)}{row + 1}"
+    return f"{row},{col}"
+
+
 def evaluate_board(layout):
     """Recibe un layout con listas de celdas ocupadas y devuelve (ok, mensaje)."""
     ship_two_cells = layout.get("ship_two_cells", [])

@@ -1,6 +1,8 @@
 # hand_main.py
 import cv2
+import json
 import os
+import time
 import numpy as np
 
 from hand_config import (
@@ -28,6 +30,46 @@ CONFIRM_GESTURE = "ok"
 REJECT_GESTURE = "nook"
 PRINT_GESTURE = "cool"
 CONTROL_GESTURES = TRIGGER_GESTURES | {CONFIRM_GESTURE, REJECT_GESTURE, PRINT_GESTURE}
+SHARED_ATTACK_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "shared_attacks"))
+TARGET_BOARD = os.environ.get("BATTLESHIP_TARGET", "1")
+
+COORD_MAP = {
+    "0dedos": 0,
+    "1dedo": 1,
+    "2dedos": 2,
+    "3dedos": 3,
+    "4dedos": 4,
+}
+
+
+def sequence_to_coord(seq):
+    if len(seq) != 2:
+        return None
+    col_label, row_label = seq
+    if col_label not in COORD_MAP or row_label not in COORD_MAP:
+        return None
+    col = COORD_MAP[col_label]
+    row = COORD_MAP[row_label]
+    return row, col
+
+COORD_MAP = {
+    "0dedos": 0,
+    "1dedo": 1,
+    "2dedos": 2,
+    "3dedos": 3,
+    "4dedos": 4,
+}
+
+
+def sequence_to_coord(seq):
+    if len(seq) != 2:
+        return None
+    col_label, row_label = seq
+    if col_label not in COORD_MAP or row_label not in COORD_MAP:
+        return None
+    col = COORD_MAP[col_label]
+    row = COORD_MAP[row_label]
+    return row, col
 
 COORD_MAP = {
     "0dedos": 0,

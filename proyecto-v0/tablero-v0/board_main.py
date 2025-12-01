@@ -1,9 +1,13 @@
 # board_main.py
 import cv2
+import json
 import os
 import json
 import glob
 import numpy as np
+from collections import Counter
+
+CAPTURE_BUFFER_FRAMES = 150
 
 from board_config import USE_UNDISTORT_BOARD, BOARD_CAMERA_PARAMS_PATH, WARP_SIZE
 import board_ui
@@ -68,6 +72,14 @@ def main():
             warp_size=WARP_SIZE,
         )
 
+        if status == "capturing":
+            _accumulate_layouts(layouts, accumulation)
+            capture_frames_left = max(0, capture_frames_left - 1)
+            if capture_frames_left == 0:
+                stable_distributions = _compute_stable_distributions(accumulation)
+                battleship_logic.set_initial_layouts(stable_distributions)
+                status = "ready"
+
         validation_map = {}
         for layout in layouts:
             ok, msg = battleship_logic.evaluate_board(layout)
@@ -95,6 +107,8 @@ def main():
             if slot["name"] in validation_map and slot["last_quad"] is not None:
                 ok, msg = validation_map[slot["name"]]
                 board_ui.draw_validation_result(vis, slot["last_quad"], msg, ok)
+
+        process_pending_attacks(boards_state_list)
 
         # dibujar el origen global si lo tenemos
         if board_state.GLOBAL_ORIGIN is not None:

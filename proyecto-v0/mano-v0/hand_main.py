@@ -33,6 +33,25 @@ CONTROL_GESTURES = TRIGGER_GESTURES | {CONFIRM_GESTURE, REJECT_GESTURE, PRINT_GE
 SHARED_ATTACK_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "shared_attacks"))
 TARGET_BOARD = os.environ.get("BATTLESHIP_TARGET", "1")
 
+COORD_MAP = {
+    "0dedos": 0,
+    "1dedo": 1,
+    "2dedos": 2,
+    "3dedos": 3,
+    "4dedos": 4,
+}
+
+
+def sequence_to_coord(seq):
+    if len(seq) != 2:
+        return None
+    col_label, row_label = seq
+    if col_label not in COORD_MAP or row_label not in COORD_MAP:
+        return None
+    col = COORD_MAP[col_label]
+    row = COORD_MAP[row_label]
+    return row, col
+
 
 def majority_vote(labels):
     if not labels:
@@ -84,47 +103,9 @@ def main():
     capture_state = "STANDBY"
     pending_candidate = None
     gesture_window = GestureWindow()
-    status_lines = ["Standby: haz 'demond' para activar el registro."]
-    sent_counters = {}
-
-    os.makedirs(SHARED_ATTACK_DIR, exist_ok=True)
-
-    def _normalize_component(label):
-        digits = "".join(ch for ch in str(label) if ch.isdigit())
-        if digits:
-            try:
-                return int(digits)
-            except ValueError:
-                return label
-        return label
-
-    def export_coordinate_json():
-        nonlocal sent_counters
-        if len(acciones) < 2:
-            print("[WARN] Secuencia incompleta, no se exporta coordenada")
-            return
-
-        row = _normalize_component(acciones[0])
-        col = _normalize_component(acciones[1])
-        ts = int(time.time() * 1000)
-        target = f"T{TARGET_BOARD}" if not str(TARGET_BOARD).startswith("T") else str(TARGET_BOARD)
-
-        sent_counters.setdefault(target, 0)
-        sent_counters[target] += 1
-        fname = f"{target}_{sent_counters[target]}.json"
-        payload = {
-            "target": target,
-            "row": row,
-            "col": col,
-            "timestamp": ts,
-        }
-        fp = os.path.join(SHARED_ATTACK_DIR, fname)
-        try:
-            with open(fp, "w", encoding="utf-8") as f:
-                json.dump(payload, f, ensure_ascii=False, indent=2)
-            print(f"[INFO] Coordenada exportada a {fp}")
-        except OSError as exc:
-            print(f"[ERROR] No se pudo escribir {fp}: {exc}")
+    status_lines = ["Standby: haz '5dedos' para activar el registro."]
+    current_target_board = "T2"
+    attack_counters = {"T1": 0, "T2": 0}
 
     def set_state(new_state, lines):
         nonlocal capture_state, status_lines
@@ -215,13 +196,13 @@ def main():
 
             elif capture_state == "CAPTURA":
                 if resolved_label == "????" or resolved_label in CONTROL_GESTURES:
-                    set_status(["Gesto no válido, repítelo."])
+                    set_status(["Gesto no valido, repitelo."])
                 else:
                     pending_candidate = resolved_label
                     set_state(
                         "CONFIRMACION",
                         [
-                            f"¿Tu gesto es '{pending_candidate}'?",
+                            f"Tu gesto es '{pending_candidate}'?",
                             "Confirma con 'ok' o repite con 'nook'.",
                         ],
                     )
@@ -229,7 +210,7 @@ def main():
             elif capture_state == "CONFIRMACION":
                 if resolved_label == CONFIRM_GESTURE and pending_candidate:
                     acciones.append(pending_candidate)
-                    print(f"[INFO] Añadido gesto confirmado: {pending_candidate}")
+                    print(f"[INFO] Aniadido gesto confirmado: {pending_candidate}")
                     pending_candidate = None
                     if len(acciones) >= MAX_SEQUENCE_LENGTH:
                         set_state(
@@ -247,15 +228,33 @@ def main():
 
             elif capture_state == "COOL":
                 if resolved_label == PRINT_GESTURE and len(acciones) == MAX_SEQUENCE_LENGTH:
-                    print("[INFO] Secuencia final:", acciones)
-                    export_coordinate_json()
-                    save_sequence_json(acciones)
-                    acciones.clear()
-                    pending_candidate = None
-                    set_state(
-                        "STANDBY",
-                        ["Standby: haz '5dedos' para activar un nuevo registro."],
-                    )
+                    coord = sequence_to_coord(acciones)
+                    if coord is None:
+                        set_status([
+                            "Secuencia invalida para coordenada (usa 0-4 dedos).",
+                            "Repite los dos gestos de columna y fila.",
+                        ])
+                    else:
+                        row, col = coord
+                        attack_counters[current_target_board] += 1
+                        shot_num = attack_counters[current_target_board]
+                        print("[INFO] Secuencia final:", acciones)
+                        save_sequence_json(
+                            acciones,
+                            target_name=current_target_board,
+                            shot_number=shot_num,
+                            row=row,
+                            col=col,
+                        )
+                        acciones.clear()
+                        pending_candidate = None
+                        set_state(
+                            "STANDBY",
+                            [
+                                "Standby: haz '5dedos' para activar un nuevo registro.",
+                                f"Objetivo actual: {current_target_board}",
+                            ],
+                        )
                 else:
                     set_status(["Secuencia lista. Usa 'cool' para imprimirla."])
 
@@ -306,6 +305,13 @@ def main():
                 ord('n'): "nook",
             }
             current_label = mapping[key]
+
+        elif key == ord('t'):
+            current_target_board = "T1" if current_target_board == "T2" else "T2"
+            set_status([
+                f"Objetivo alternado a {current_target_board}",
+                "Standby: haz '5dedos' para activar el registro.",
+            ])
 
     cap.release()
     cv2.destroyAllWindows()

@@ -1,4 +1,6 @@
-"""Validación sencilla de tableros de Hundir la Flota."""
+"""Validacion sencilla de tableros de Hundir la Flota y gestion de turnos."""
+
+BOARD_LABELS = ["A", "B", "C", "D", "E"]
 
 # distribuciones capturadas para inicializar la partida
 INITIAL_BOARD_LAYOUTS = {}
@@ -120,7 +122,7 @@ def evaluate_board(layout):
 
     # comprobar cantidades
     if len(ship_two_cells) != 2:
-        errors.append("El barco de 2 casillas no está completo")
+        errors.append("El barco de 2 casillas no esta completo")
     if len(ship_one_cells) != 3:
         errors.append("Tiene que haber exactamente 3 barcos de 1 casilla")
 
@@ -154,7 +156,7 @@ def evaluate_board(layout):
             break
 
     if not errors:
-        return True, "Distribución correcta"
+        return True, "Distribucion correcta"
     # devolver solo errores únicos para no repetir el mismo texto
     uniq_errors = []
     for err in errors:
@@ -163,42 +165,130 @@ def evaluate_board(layout):
     return False, " | ".join(uniq_errors)
 
 
-def apply_attack(board_state, cell):
-    """
-    Aplica un ataque sobre un tablero ya identificado.
-
-    Devuelve (hit, mensaje) y marca la casilla como atacada para evitar duplicados.
-    """
-
-    if board_state is None:
-        return False, "Tablero no encontrado"
-
-    normalized_cell = _normalize_cell(cell)
-    attacked = board_state.setdefault("attacked_cells", set())
-    if normalized_cell in attacked:
-        return False, f"Casilla {_format_cell_label(normalized_cell)} repetida"
-
-    attacked.add(normalized_cell)
-
-    occupied = set(board_state.get("ship_two_cells", [])) | set(
-        board_state.get("ship_one_cells", [])
-    )
-
-    if normalized_cell in occupied:
-        board_state.setdefault("hits", set()).add(normalized_cell)
-        return True, f"Impacto en {_format_cell_label(normalized_cell)}"
-
-    board_state.setdefault("misses", set()).add(normalized_cell)
-    return False, f"Agua en {_format_cell_label(normalized_cell)}"
-def set_initial_layouts(layouts):
-    """
-    Guarda distribuciones estabilizadas para que la logica de juego pueda arrancar
-    con los tableros inicializados.
-    """
-    global INITIAL_BOARD_LAYOUTS
-    INITIAL_BOARD_LAYOUTS = layouts or {}
+def init_game_state(layouts_by_name):
+    boards = {}
+    for name, layout in layouts_by_name.items():
+        boards[name] = _build_board_from_layout(name, layout)
+    return {
+        "boards": boards,
+        "current_attacker": "T1",
+        "current_defender": "T2",
+        "finished": False,
+        "winner": None,
+    }
 
 
-def get_initial_layouts():
-    """Devuelve las distribuciones estabilizadas capturadas."""
-    return INITIAL_BOARD_LAYOUTS
+def apply_attack(game_state, target_board, row, col):
+    if game_state.get("finished"):
+        return {"status": "finished", "winner": game_state.get("winner")}
+
+    attacker = game_state.get("current_attacker")
+    defender = game_state.get("current_defender")
+
+    if target_board != defender:
+        return {
+            "status": "wrong_target",
+            "attacker": attacker,
+            "defender": defender,
+            "cell": _format_cell(row, col),
+        }
+
+    board = game_state["boards"].get(defender)
+    if board is None:
+        return None
+
+    row_i = int(row)
+    col_i = int(col)
+    cell = (row_i, col_i)
+    if row_i < 0 or col_i < 0 or row_i >= board["board_size"] or col_i >= board["board_size"]:
+        return {
+            "status": "invalid",
+            "attacker": attacker,
+            "defender": defender,
+            "cell": _format_cell(row, col),
+        }
+    if cell in board["attacked_cells"]:
+        return {
+            "status": "invalid",
+            "attacker": attacker,
+            "defender": defender,
+            "cell": _format_cell(row, col),
+        }
+
+    board["attacked_cells"].add(cell)
+
+    if cell not in board["cell_to_ship"]:
+        _switch_turn(game_state)
+        return {
+            "status": "agua",
+            "attacker": attacker,
+            "defender": defender,
+            "cell": _format_cell(row, col),
+        }
+
+    ship_id = board["cell_to_ship"][cell]
+    ship = board["ships"][ship_id]
+    ship["hits"].add(cell)
+
+    if len(ship["hits"]) >= len(ship["cells"]):
+        board["ships_alive"] -= 1
+        winner = None
+        if board["ships_alive"] <= 0:
+            game_state["finished"] = True
+            winner = attacker
+            game_state["winner"] = winner
+        return {
+            "status": "hundido",
+            "attacker": attacker,
+            "defender": defender,
+            "cell": _format_cell(row, col),
+            "winner": winner,
+        }
+
+    return {
+        "status": "tocado",
+        "attacker": attacker,
+        "defender": defender,
+        "cell": _format_cell(row, col),
+    }
+
+
+def _build_board_from_layout(name, layout):
+    cell_to_ship = {}
+    ships = {}
+
+    ship_two = layout.get("ship_two_cells", [])
+    ship_one = layout.get("ship_one_cells", [])
+
+    if ship_two:
+        ship_id = f"{name}_B2"
+        ships[ship_id] = {"cells": set(ship_two), "hits": set()}
+        for cell in ship_two:
+            cell_to_ship[tuple(cell)] = ship_id
+
+    for idx, cell in enumerate(ship_one):
+        ship_id = f"{name}_B1_{idx}"
+        ships[ship_id] = {"cells": {tuple(cell)}, "hits": set()}
+        cell_to_ship[tuple(cell)] = ship_id
+
+    return {
+        "name": name,
+        "cell_to_ship": cell_to_ship,
+        "ships": ships,
+        "ships_alive": len(ships),
+        "attacked_cells": set(),
+        "board_size": layout.get("board_size", 5),
+    }
+
+
+def _switch_turn(game_state):
+    atk = game_state.get("current_attacker")
+    defn = game_state.get("current_defender")
+    game_state["current_attacker"], game_state["current_defender"] = defn, atk
+
+
+def _format_cell(row, col):
+    col = int(col)
+    row = int(row)
+    col_label = BOARD_LABELS[col] if 0 <= col < len(BOARD_LABELS) else str(col)
+    return f"{col_label}{row + 1}"

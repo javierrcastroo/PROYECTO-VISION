@@ -48,7 +48,7 @@ configurar ventana ``Mano'' y callback de ratón para ROI\;
     \tcp{Máquina de estados controlada por gestos}
     \Switch{$capture\_state$}{
         \Case{``STANDBY''}{
-            si $resolved \in$ \{``demond``, ``demonio''\} $\Rightarrow$ pasar a ``CAPTURA''; en otro caso, mostrar ayuda.
+            si $resolved = \text{``5dedos''}$ $\Rightarrow$ pasar a ``CAPTURA''; en otro caso, mostrar ayuda.
         }
         \Case{``CAPTURA''}{
             si $resolved$ es desconocido o de control $\Rightarrow$ pedir repetir; en otro caso $pending\_candidate \leftarrow resolved$ y pasar a ``CONFIRMACION''.
@@ -68,13 +68,10 @@ configurar ventana ``Mano'' y callback de ratón para ROI\;
     \If{$key$ == c}{
         si ROI definida y suficientemente grande $\Rightarrow (lower\_skin, upper\_skin) \leftarrow \Calibrate(ROI\_hsv)$; otro caso: avisar.
     }
-    \If{$key$ == b}{
-        si ROI definida $\Rightarrow$ guardar mediana HSV como referencia blanca (\texttt{white\_ref}).
-    }
     \If{$key$ == g}{
         si $feat \neq \bot$ $\Rightarrow \Save(feat, current\_label)$ y añadir a $gallery$ si está activo reconocimiento.
     }
-    \If{$key$ en \{0,1,2,3,4,5,d,p,-,n\}}{actualizar $current\_label$ según mapeo (0--5 dedos, demonio, ok, cool, nook).}
+    \If{$key$ en \{0,1,2,3,4,5,p,-,n\}}{actualizar $current\_label$ según mapeo (0--5 dedos, ok, cool, nook).}
 }
 liberar cámara y destruir ventanas\;
 \caption{Pseudocódigo de alto nivel de \texttt{hand\_main.py}.}

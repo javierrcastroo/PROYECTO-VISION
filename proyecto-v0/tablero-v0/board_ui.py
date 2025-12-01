@@ -9,6 +9,24 @@ bx_start = by_start = bx_end = by_end = 0
 # ====== PUNTOS DE MEDIDA (clic derecho) ======
 measure_points = []   # lista de (x, y)
 
+# ====== ESTADOS DEL TABLERO ======
+_GAME_STATE_TEXTS = {
+    "standby": "Estado: standby",
+    "captura": "Estado: captura",
+    "turno": "Estado: turno",
+}
+
+_ATTACK_RESULT_TEXTS = {
+    "invalido": "Ataque invalido",
+    "agua": "Ataque en agua",
+    "tocado": "Ataque tocado",
+    "hundido": "Ataque hundido",
+    None: "Ataque no disponible",
+}
+
+_current_game_state = _GAME_STATE_TEXTS["standby"]
+_current_attack_result = _ATTACK_RESULT_TEXTS[None]
+
 
 def board_mouse_callback(event, x, y, flags, param):
     """
@@ -63,6 +81,42 @@ def draw_measure_points(img):
         cv2.circle(img, (x, y), 5, (0, 0, 255), -1)
         cv2.putText(img, f"P{i+1}", (x+5, y-5),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,0,255), 1, cv2.LINE_AA)
+
+
+def set_game_state(state_key):
+    """Actualiza el texto mostrado para el estado del tablero."""
+    global _current_game_state
+    _current_game_state = _GAME_STATE_TEXTS.get(state_key, _GAME_STATE_TEXTS["standby"])
+
+
+def set_attack_result(result_key):
+    """Actualiza el mensaje del ultimo resultado de ataque."""
+    global _current_attack_result
+    _current_attack_result = _ATTACK_RESULT_TEXTS.get(result_key, _ATTACK_RESULT_TEXTS[None])
+
+
+def draw_state_status(img):
+    """Dibuja los textos de estado y ultimo ataque en la esquina inferior derecha."""
+    if img is None:
+        return
+
+    lines = [_current_game_state, _current_attack_result]
+    margin = 10
+    x = img.shape[1] - 300
+    y = img.shape[0] - 20
+
+    for line in reversed(lines):
+        cv2.putText(
+            img,
+            line,
+            (x, y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
+        y -= 20 + margin // 2
 
 
 def draw_board_hud(img):

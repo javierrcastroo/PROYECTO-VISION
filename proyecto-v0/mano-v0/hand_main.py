@@ -1,6 +1,8 @@
 # hand_main.py
 import cv2
+import json
 import os
+import time
 import numpy as np
 
 from hand_config import (
@@ -28,6 +30,8 @@ CONFIRM_GESTURE = "ok"
 REJECT_GESTURE = "nook"
 PRINT_GESTURE = "cool"
 CONTROL_GESTURES = TRIGGER_GESTURES | {CONFIRM_GESTURE, REJECT_GESTURE, PRINT_GESTURE}
+SHARED_ATTACK_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "shared_attacks"))
+TARGET_BOARD = os.environ.get("BATTLESHIP_TARGET", "1")
 
 COORD_MAP = {
     "0dedos": 0,

@@ -1,6 +1,8 @@
 # hand_main.py
 import cv2
+import json
 import os
+import time
 import numpy as np
 
 from hand_config import (
@@ -28,6 +30,8 @@ CONFIRM_GESTURE = "ok"
 REJECT_GESTURE = "nook"
 PRINT_GESTURE = "cool"
 CONTROL_GESTURES = TRIGGER_GESTURES | {CONFIRM_GESTURE, REJECT_GESTURE, PRINT_GESTURE}
+SHARED_ATTACK_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "shared_attacks"))
+TARGET_BOARD = os.environ.get("BATTLESHIP_TARGET", "1")
 
 
 def majority_vote(labels):
@@ -80,7 +84,47 @@ def main():
     capture_state = "STANDBY"
     pending_candidate = None
     gesture_window = GestureWindow()
-    status_lines = ["Standby: haz '5dedos' para activar el registro."]
+    status_lines = ["Standby: haz 'demond' para activar el registro."]
+    sent_counters = {}
+
+    os.makedirs(SHARED_ATTACK_DIR, exist_ok=True)
+
+    def _normalize_component(label):
+        digits = "".join(ch for ch in str(label) if ch.isdigit())
+        if digits:
+            try:
+                return int(digits)
+            except ValueError:
+                return label
+        return label
+
+    def export_coordinate_json():
+        nonlocal sent_counters
+        if len(acciones) < 2:
+            print("[WARN] Secuencia incompleta, no se exporta coordenada")
+            return
+
+        row = _normalize_component(acciones[0])
+        col = _normalize_component(acciones[1])
+        ts = int(time.time() * 1000)
+        target = f"T{TARGET_BOARD}" if not str(TARGET_BOARD).startswith("T") else str(TARGET_BOARD)
+
+        sent_counters.setdefault(target, 0)
+        sent_counters[target] += 1
+        fname = f"{target}_{sent_counters[target]}.json"
+        payload = {
+            "target": target,
+            "row": row,
+            "col": col,
+            "timestamp": ts,
+        }
+        fp = os.path.join(SHARED_ATTACK_DIR, fname)
+        try:
+            with open(fp, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+            print(f"[INFO] Coordenada exportada a {fp}")
+        except OSError as exc:
+            print(f"[ERROR] No se pudo escribir {fp}: {exc}")
 
     def set_state(new_state, lines):
         nonlocal capture_state, status_lines
@@ -204,6 +248,7 @@ def main():
             elif capture_state == "COOL":
                 if resolved_label == PRINT_GESTURE and len(acciones) == MAX_SEQUENCE_LENGTH:
                     print("[INFO] Secuencia final:", acciones)
+                    export_coordinate_json()
                     save_sequence_json(acciones)
                     acciones.clear()
                     pending_candidate = None

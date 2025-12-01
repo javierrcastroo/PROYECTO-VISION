@@ -92,6 +92,25 @@ def _cells_adjacent(a, b):
     return max(abs(a[0] - b[0]), abs(a[1] - b[1])) <= 1
 
 
+def _normalize_cell(cell):
+    try:
+        row = int(cell[0])
+    except (TypeError, ValueError, IndexError):
+        row = cell[0]
+    try:
+        col = int(cell[1])
+    except (TypeError, ValueError, IndexError):
+        col = cell[1]
+    return (row, col)
+
+
+def _format_cell_label(cell):
+    row, col = _normalize_cell(cell)
+    if isinstance(row, int) and isinstance(col, int):
+        return f"{chr(ord('A') + col)}{row + 1}"
+    return f"{row},{col}"
+
+
 def evaluate_board(layout):
     """Recibe un layout con listas de celdas ocupadas y devuelve (ok, mensaje)."""
     ship_two_cells = layout.get("ship_two_cells", [])
@@ -144,6 +163,33 @@ def evaluate_board(layout):
     return False, " | ".join(uniq_errors)
 
 
+def apply_attack(board_state, cell):
+    """
+    Aplica un ataque sobre un tablero ya identificado.
+
+    Devuelve (hit, mensaje) y marca la casilla como atacada para evitar duplicados.
+    """
+
+    if board_state is None:
+        return False, "Tablero no encontrado"
+
+    normalized_cell = _normalize_cell(cell)
+    attacked = board_state.setdefault("attacked_cells", set())
+    if normalized_cell in attacked:
+        return False, f"Casilla {_format_cell_label(normalized_cell)} repetida"
+
+    attacked.add(normalized_cell)
+
+    occupied = set(board_state.get("ship_two_cells", [])) | set(
+        board_state.get("ship_one_cells", [])
+    )
+
+    if normalized_cell in occupied:
+        board_state.setdefault("hits", set()).add(normalized_cell)
+        return True, f"Impacto en {_format_cell_label(normalized_cell)}"
+
+    board_state.setdefault("misses", set()).add(normalized_cell)
+    return False, f"Agua en {_format_cell_label(normalized_cell)}"
 def set_initial_layouts(layouts):
     """
     Guarda distribuciones estabilizadas para que la logica de juego pueda arrancar

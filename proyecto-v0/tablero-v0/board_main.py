@@ -2,6 +2,9 @@
 import cv2
 import os
 import numpy as np
+from collections import Counter
+
+CAPTURE_BUFFER_FRAMES = 150
 
 from board_config import USE_UNDISTORT_BOARD, BOARD_CAMERA_PARAMS_PATH, WARP_SIZE
 import board_ui
@@ -32,6 +35,11 @@ def main():
     cv2.namedWindow("Tablero")
     cv2.setMouseCallback("Tablero", board_ui.board_mouse_callback)
 
+    status = "standby"
+    capture_frames_left = 0
+    accumulation = {}
+    stable_distributions = {}
+
     while True:
         ok, frame = cap.read()
         if not ok:
@@ -49,6 +57,14 @@ def main():
             max_boards=2,
             warp_size=WARP_SIZE,
         )
+
+        if status == "capturing":
+            _accumulate_layouts(layouts, accumulation)
+            capture_frames_left = max(0, capture_frames_left - 1)
+            if capture_frames_left == 0:
+                stable_distributions = _compute_stable_distributions(accumulation)
+                battleship_logic.set_initial_layouts(stable_distributions)
+                status = "ready"
 
         validation_map = {}
         for layout in layouts:
@@ -76,6 +92,7 @@ def main():
             )
 
         board_ui.draw_board_hud(vis)
+        _draw_status_message(vis, status, capture_frames_left, stable_distributions)
 
         # mostrar
         cv2.imshow("Tablero", vis)
@@ -91,7 +108,13 @@ def main():
         if key in (27, ord("q")):
             break
 
-        handle_keys(key, frame)
+        if key == ord("s"):
+            status = "capturing"
+            capture_frames_left = CAPTURE_BUFFER_FRAMES
+            accumulation = {}
+            stable_distributions = {}
+        else:
+            handle_keys(key, frame)
 
     cap.release()
     cv2.destroyAllWindows()
@@ -150,6 +173,74 @@ def handle_keys(key, frame):
             print("[INFO] calibrada MUNICION:", lo, up)
         else:
             print("[WARN] dibuja ROI sobre la municion")
+
+
+
+def _accumulate_layouts(layouts, accumulation):
+    for layout in layouts:
+        name = layout.get("name")
+        if name is None:
+            continue
+        entry = accumulation.setdefault(
+            name,
+            {"ship_two": Counter(), "ship_one": Counter(), "board_size": layout.get("board_size")},
+        )
+        if entry.get("board_size") is None:
+            entry["board_size"] = layout.get("board_size")
+
+        for cell in layout.get("ship_two_cells", []):
+            entry["ship_two"][tuple(cell)] += 1
+        for cell in layout.get("ship_one_cells", []):
+            entry["ship_one"][tuple(cell)] += 1
+
+
+def _compute_stable_distributions(accumulation):
+    stable = {}
+    for name, data in accumulation.items():
+        ship_two_cells = _select_top_cells(data.get("ship_two", Counter()), 2)
+        ship_one_cells = _select_top_cells(data.get("ship_one", Counter()), 3)
+        stable[name] = {
+            "name": name,
+            "ship_two_cells": ship_two_cells,
+            "ship_one_cells": ship_one_cells,
+            "board_size": data.get("board_size"),
+        }
+    return stable
+
+
+def _select_top_cells(counter_obj, limit):
+    if not counter_obj:
+        return []
+    sorted_cells = [cell for cell, _ in counter_obj.most_common(limit)]
+    return sorted(sorted_cells)
+
+
+def _draw_status_message(vis, status, capture_frames_left, stable_distributions):
+    if vis is None:
+        return
+    h = vis.shape[0]
+    y_pos = max(30, h - 20)
+    if status == "capturing":
+        progress = CAPTURE_BUFFER_FRAMES - capture_frames_left
+        msg = f"Captura en curso: {progress}/{CAPTURE_BUFFER_FRAMES}"
+    elif status == "ready":
+        board_names = ", ".join(sorted(stable_distributions.keys())) or "sin tableros"
+        msg = f"Distribuciones listas: {board_names}. Listo para jugar"
+    else:
+        msg = "Estado: standby - presiona s para capturar"
+
+    (text_w, text_h), _ = cv2.getTextSize(msg, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+    cv2.rectangle(vis, (5, y_pos - text_h - 10), (15 + text_w, y_pos + 10), (0, 0, 0), -1)
+    cv2.putText(
+        vis,
+        msg,
+        (10, y_pos),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.6,
+        (0, 255, 0),
+        2,
+        cv2.LINE_AA,
+    )
 
 
 

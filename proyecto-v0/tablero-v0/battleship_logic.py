@@ -1,5 +1,7 @@
 """Validación sencilla de tableros de Hundir la Flota."""
 
+# distribuciones capturadas para inicializar la partida
+INITIAL_BOARD_LAYOUTS = {}
 CELL_NOT_ATTACKED = "no_atacada"
 CELL_MISS = "atacada_agua"
 CELL_HIT = "tocado"
@@ -140,3 +142,17 @@ def evaluate_board(layout):
         if err not in uniq_errors:
             uniq_errors.append(err)
     return False, " | ".join(uniq_errors)
+
+
+def set_initial_layouts(layouts):
+    """
+    Guarda distribuciones estabilizadas para que la logica de juego pueda arrancar
+    con los tableros inicializados.
+    """
+    global INITIAL_BOARD_LAYOUTS
+    INITIAL_BOARD_LAYOUTS = layouts or {}
+
+
+def get_initial_layouts():
+    """Devuelve las distribuciones estabilizadas capturadas."""
+    return INITIAL_BOARD_LAYOUTS

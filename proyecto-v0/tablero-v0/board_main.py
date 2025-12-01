@@ -43,7 +43,7 @@ def main():
 
     os.makedirs(ATTACKS_DIR, exist_ok=True)
 
-    mode = "STANDBY"  # STANDBY -> CAPTURING -> PLAYING
+    status = "STANDBY"  # STANDBY -> CAPTURING -> PLAYING
     capture_frames_left = 0
     layout_samples = {"T1": [], "T2": []}
     stabilized_layouts = None
@@ -86,10 +86,10 @@ def main():
             validation_map[layout["name"]] = (ok, msg)
             print(f"[{layout['name']}] {msg}")
 
-            if mode == "CAPTURING":
+            if status == "CAPTURING":
                 layout_samples[layout["name"]].append(_snapshot_layout(layout))
 
-        if mode == "CAPTURING":
+        if status == "CAPTURING":
             capture_frames_left -= 1
             status_lines = [
                 f"Capturando layout estable ({capture_frames_left} frames restantes)",
@@ -97,7 +97,7 @@ def main():
             if capture_frames_left <= 0:
                 stabilized_layouts = _select_stable_layouts(layout_samples, boards_state_list)
                 game_state = battleship_logic.init_game_state(stabilized_layouts)
-                mode = "PLAYING"
+                status = "PLAYING"
                 status_lines = [
                     "Layouts fijados. Empieza la partida.",
                     "Turno inicial: T1 ataca T2",
@@ -124,7 +124,7 @@ def main():
                 2,
             )
 
-        if mode == "PLAYING" and game_state is not None:
+        if status == "PLAYING" and game_state is not None:
             if not game_state.get("finished"):
                 status_lines = [
                     f"Turno de ataque: {game_state['current_attacker']} -> {game_state['current_defender']}",
@@ -155,10 +155,10 @@ def main():
         if key in (27, ord("q")):
             break
 
-        if key == ord("s") and mode == "STANDBY":
+        if key == ord("s") and status == "STANDBY":
             capture_frames_left = CAPTURE_FRAMES
             layout_samples = {"T1": [], "T2": []}
-            mode = "CAPTURING"
+            status = "CAPTURING"
             status_lines = [
                 f"Inicio de captura de layout durante {CAPTURE_FRAMES} frames",
             ]

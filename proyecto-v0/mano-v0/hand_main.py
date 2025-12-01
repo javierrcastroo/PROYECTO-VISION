@@ -52,6 +52,25 @@ def sequence_to_coord(seq):
     row = COORD_MAP[row_label]
     return row, col
 
+COORD_MAP = {
+    "0dedos": 0,
+    "1dedo": 1,
+    "2dedos": 2,
+    "3dedos": 3,
+    "4dedos": 4,
+}
+
+
+def sequence_to_coord(seq):
+    if len(seq) != 2:
+        return None
+    col_label, row_label = seq
+    if col_label not in COORD_MAP or row_label not in COORD_MAP:
+        return None
+    col = COORD_MAP[col_label]
+    row = COORD_MAP[row_label]
+    return row, col
+
 
 def majority_vote(labels):
     if not labels:

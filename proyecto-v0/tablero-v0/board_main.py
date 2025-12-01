@@ -1,5 +1,6 @@
 # board_main.py
 import cv2
+import json
 import os
 import numpy as np
 
@@ -9,6 +10,83 @@ import board_state
 import board_processing as bp
 import aruco_utils
 import battleship_logic
+
+
+SHARED_ATTACK_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "shared_attacks"))
+
+
+def _to_int(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return value
+
+
+def _normalize_cell(row, col):
+    return (_to_int(row), _to_int(col))
+
+
+def _parse_target(fname, payload):
+    if "target" in payload and payload["target"]:
+        target = str(payload["target"])
+        return target if target.startswith("T") else f"T{target}"
+    if fname.startswith("T") and "_" in fname:
+        return fname.split("_")[0]
+    return None
+
+
+def process_pending_attacks(boards_state_list):
+    os.makedirs(SHARED_ATTACK_DIR, exist_ok=True)
+    pending_files = sorted(
+        f for f in os.listdir(SHARED_ATTACK_DIR) if f.lower().endswith(".json")
+    )
+
+    for fname in pending_files:
+        fp = os.path.join(SHARED_ATTACK_DIR, fname)
+        try:
+            with open(fp, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"[WARN] No se pudo leer {fp}: {exc}")
+            _safe_remove(fp)
+            continue
+
+        target = _parse_target(fname, payload)
+        if target is None:
+            print(f"[WARN] Archivo {fname} sin objetivo válido")
+            _safe_remove(fp)
+            continue
+
+        row = payload.get("row")
+        col = payload.get("col")
+        if row is None or col is None:
+            print(f"[{target}] Falta fila o columna en {fname}")
+            _safe_remove(fp)
+            continue
+
+        slot = next((s for s in boards_state_list if s.get("name") == target), None)
+        if slot is None:
+            print(f"[WARN] Objetivo {target} no encontrado para {fname}")
+            _safe_remove(fp)
+            continue
+
+        cell = _normalize_cell(row, col)
+        attacked = slot.setdefault("attacked_cells", set())
+        if cell in attacked:
+            print(f"[{target}] Casilla ya atacada: {cell}")
+            _safe_remove(fp)
+            continue
+
+        hit, msg = battleship_logic.apply_attack(slot, cell)
+        print(f"[{target}] {msg}")
+        _safe_remove(fp)
+
+
+def _safe_remove(path):
+    try:
+        os.remove(path)
+    except OSError as exc:
+        print(f"[WARN] No se pudo limpiar {path}: {exc}")
 
 def main():
     cap = cv2.VideoCapture(1)
@@ -60,6 +138,8 @@ def main():
             if slot["name"] in validation_map and slot["last_quad"] is not None:
                 ok, msg = validation_map[slot["name"]]
                 board_ui.draw_validation_result(vis, slot["last_quad"], msg, ok)
+
+        process_pending_attacks(boards_state_list)
 
         # dibujar el origen global si lo tenemos
         if board_state.GLOBAL_ORIGIN is not None:

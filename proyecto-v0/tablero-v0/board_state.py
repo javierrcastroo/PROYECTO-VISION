@@ -13,6 +13,9 @@ def init_board_state(name):
         "miss": 0,
         "ship_two_cells": [],
         "ship_one_cells": [],
+        "attacked_cells": set(),
+        "hits": set(),
+        "misses": set(),
     }
 
 

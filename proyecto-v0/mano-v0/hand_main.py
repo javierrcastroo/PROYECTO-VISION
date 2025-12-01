@@ -71,6 +71,25 @@ def sequence_to_coord(seq):
     row = COORD_MAP[row_label]
     return row, col
 
+COORD_MAP = {
+    "0dedos": 0,
+    "1dedo": 1,
+    "2dedos": 2,
+    "3dedos": 3,
+    "4dedos": 4,
+}
+
+
+def sequence_to_coord(seq):
+    if len(seq) != 2:
+        return None
+    col_label, row_label = seq
+    if col_label not in COORD_MAP or row_label not in COORD_MAP:
+        return None
+    col = COORD_MAP[col_label]
+    row = COORD_MAP[row_label]
+    return row, col
+
 
 def majority_vote(labels):
     if not labels:
@@ -104,7 +123,7 @@ class GestureWindow:
 def main():
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
-        raise RuntimeError("No se pudo abrir la cámara 0 (mano)")
+        raise RuntimeError("No se pudo abrir la camara 0 (mano)")
 
     HAND_CAM_MTX = HAND_DIST = None
     if USE_UNDISTORT_HAND and os.path.exists(HAND_CAMERA_PARAMS_PATH):
@@ -288,7 +307,7 @@ def main():
                     lower_skin, upper_skin = calibrate_from_roi(roi_hsv)
                     print("[INFO] calibrado HSV mano:", lower_skin, upper_skin)
                 else:
-                    print("[WARN] ROI muy pequeño")
+                    print("[WARN] ROI muy pequeno")
             else:
                 print("[WARN] dibuja un ROI en 'Mano' primero")
 
@@ -299,7 +318,7 @@ def main():
                     gallery.append((feat_vec, current_label))
                 print(f"[INFO] guardado gesto {current_label}")
             else:
-                print("[WARN] no hay gesto válido")
+                print("[WARN] no hay gesto valido")
 
         elif key in (
             ord('0'),

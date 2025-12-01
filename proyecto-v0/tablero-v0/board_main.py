@@ -22,9 +22,9 @@ CAPTURE_FRAMES = 150
 def main():
     cap = cv2.VideoCapture(1)
     if not cap.isOpened():
-        raise RuntimeError("No se pudo abrir la cámara 1 (tablero)")
+        raise RuntimeError("No se pudo abrir la camara 1 (tablero)")
 
-    # cargar calibración de cámara
+    # cargar calibracion de camara
     mtx = dist = None
     if USE_UNDISTORT_BOARD and os.path.exists(BOARD_CAMERA_PARAMS_PATH):
         data = np.load(BOARD_CAMERA_PARAMS_PATH)
@@ -45,7 +45,7 @@ def main():
 
     status = "STANDBY"  # STANDBY -> CAPTURING -> PLAYING
     capture_frames_left = 0
-    layout_samples = {"T1": [], "T2": []}
+    accumulation = {"T1": [], "T2": []}
     stabilized_layouts = None
     game_state = None
     processed_attacks = set()
@@ -86,8 +86,8 @@ def main():
             validation_map[layout["name"]] = (ok, msg)
             print(f"[{layout['name']}] {msg}")
 
-            if status == "CAPTURING":
-                layout_samples[layout["name"]].append(_snapshot_layout(layout))
+        if status == "CAPTURING":
+            _accumulate_layouts(layouts, accumulation)
 
         if status == "CAPTURING":
             capture_frames_left -= 1
@@ -95,7 +95,7 @@ def main():
                 f"Capturando layout estable ({capture_frames_left} frames restantes)",
             ]
             if capture_frames_left <= 0:
-                stabilized_layouts = _select_stable_layouts(layout_samples, boards_state_list)
+                stabilized_layouts = _select_stable_layouts(accumulation, boards_state_list)
                 game_state = battleship_logic.init_game_state(stabilized_layouts)
                 status = "PLAYING"
                 status_lines = [
@@ -157,7 +157,7 @@ def main():
 
         if key == ord("s") and status == "STANDBY":
             capture_frames_left = CAPTURE_FRAMES
-            layout_samples = {"T1": [], "T2": []}
+            accumulation = {"T1": [], "T2": []}
             status = "CAPTURING"
             status_lines = [
                 f"Inicio de captura de layout durante {CAPTURE_FRAMES} frames",
@@ -231,6 +231,14 @@ def _snapshot_layout(layout):
         "ship_one_cells": tuple(sorted(layout.get("ship_one_cells", []))),
         "board_size": layout.get("board_size", 5),
     }
+
+
+def _accumulate_layouts(layouts, accumulation):
+    for layout in layouts:
+        name = layout.get("name")
+        if name not in accumulation:
+            accumulation[name] = []
+        accumulation[name].append(_snapshot_layout(layout))
 
 
 def _select_stable_layouts(samples_map, boards_state_list):

@@ -58,3 +58,12 @@ def save_sequence_json(
     with open(fp, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
     print(f"[INFO] Secuencia guardada en {fp}")
+
+
+def save_restart_request(out_dir=ATTACKS_DIR):
+    os.makedirs(out_dir, exist_ok=True)
+    payload = {"timestamp": int(time.time()), "action": "restart"}
+    fp = os.path.join(out_dir, "restart.json")
+    with open(fp, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+    print(f"[INFO] Peticion de reinicio guardada en {fp}")

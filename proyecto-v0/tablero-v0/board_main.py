@@ -18,6 +18,7 @@ import battleship_logic
 
 ATTACKS_DIR = os.path.join(os.path.dirname(__file__), "..", "ataques")
 LAST_RESULT_FILE = os.path.join(ATTACKS_DIR, "last_result.json")
+RESTART_FILE = os.path.join(ATTACKS_DIR, "restart.json")
 CAPTURE_FRAMES = 150
 
 def main():
@@ -34,10 +35,7 @@ def main():
         
 
     # dos tableros
-    boards_state_list = [
-        board_state.init_board_state("T1"),
-        board_state.init_board_state("T2"),
-    ]
+    boards_state_list = _init_boards()
 
     cv2.namedWindow("Tablero")
     cv2.setMouseCallback("Tablero", board_ui.board_mouse_callback)
@@ -133,6 +131,19 @@ def main():
             if pending_msg:
                 status_lines = pending_msg
 
+            if game_state.get("finished") and _consume_restart_request():
+                (
+                    boards_state_list,
+                    accumulation,
+                    stabilized_layouts,
+                    game_state,
+                    processed_attacks,
+                    status,
+                    status_lines,
+                    last_status_lines_printed,
+                    capture_frames_left,
+                ) = _restart_game()
+
         board_ui.draw_board_hud(vis)
         _draw_status_lines(vis, status_lines)
 
@@ -162,6 +173,18 @@ def main():
             status_lines = [
                 f"Inicio de captura de layout durante {CAPTURE_FRAMES} frames",
             ]
+        elif key == ord("r"):
+            (
+                boards_state_list,
+                accumulation,
+                stabilized_layouts,
+                game_state,
+                processed_attacks,
+                status,
+                status_lines,
+                last_status_lines_printed,
+                capture_frames_left,
+            ) = _restart_game()
         else:
             handle_keys(key, frame)
 
@@ -223,6 +246,13 @@ def handle_keys(key, frame):
         else:
             print("[WARN] dibuja ROI sobre la municion")
 
+
+
+def _init_boards():
+    return [
+        board_state.init_board_state("T1"),
+        board_state.init_board_state("T2"),
+    ]
 
 
 def _snapshot_layout(layout):
@@ -320,6 +350,86 @@ def _process_new_attacks(game_state, processed_attacks):
         except OSError:
             pass
     return msgs
+
+
+def _consume_restart_request():
+    if not os.path.exists(RESTART_FILE):
+        return False
+    try:
+        os.remove(RESTART_FILE)
+    except OSError:
+        pass
+    return True
+
+
+def _clear_pending_attack_files():
+    try:
+        for fp in glob.glob(os.path.join(ATTACKS_DIR, "T*_*.json")):
+            os.remove(fp)
+    except OSError:
+        pass
+
+
+def _restart_game():
+    _reset_calibration_state()
+
+    boards_state_list = _init_boards()
+    accumulation = {"T1": [], "T2": []}
+    stabilized_layouts = None
+    game_state = None
+    processed_attacks = set()
+    board_state.GLOBAL_ORIGIN = None
+    board_state.GLOBAL_ORIGIN_MISS = 0
+    status = "STANDBY"
+    status_lines = [
+        "Reinicio solicitado. Coloca de nuevo los tableros y calibra si es necesario.",
+        f"Pulsa 's' para fijar el layout ({CAPTURE_FRAMES} frames)",
+    ]
+    capture_frames_left = 0
+
+    _clear_pending_attack_files()
+    _write_last_result(
+        {"timestamp": int(time.time()), "status": "reset"},
+        status_lines,
+        game_state,
+    )
+    last_status_lines_printed = None
+
+    return (
+        boards_state_list,
+        accumulation,
+        stabilized_layouts,
+        game_state,
+        processed_attacks,
+        status,
+        status_lines,
+        last_status_lines_printed,
+        capture_frames_left,
+    )
+
+
+def _reset_calibration_state():
+    import board_tracker
+    import object_tracker
+
+    board_tracker.current_lower = board_tracker.DEFAULT_LOWER.copy()
+    board_tracker.current_upper = board_tracker.DEFAULT_UPPER.copy()
+
+    object_tracker.current_ship_two_lower = object_tracker.SHIP_TWO_LOWER_DEFAULT.copy()
+    object_tracker.current_ship_two_upper = object_tracker.SHIP_TWO_UPPER_DEFAULT.copy()
+    object_tracker.current_ship_one_lower = object_tracker.SHIP_ONE_LOWER_DEFAULT.copy()
+    object_tracker.current_ship_one_upper = object_tracker.SHIP_ONE_UPPER_DEFAULT.copy()
+    object_tracker.current_ammo_lower = object_tracker.AMMO_LOWER_DEFAULT.copy()
+    object_tracker.current_ammo_upper = object_tracker.AMMO_UPPER_DEFAULT.copy()
+    object_tracker.current_origin_lower = object_tracker.ORIG_LOWER_DEFAULT.copy()
+    object_tracker.current_origin_upper = object_tracker.ORIG_UPPER_DEFAULT.copy()
+
+    board_ui.board_roi_selecting = False
+    board_ui.board_roi_defined = False
+    board_ui.bx_start = board_ui.by_start = board_ui.bx_end = board_ui.by_end = 0
+    board_ui.measure_points = []
+
+    bp.clear_display_cache()
 
 
 def _format_attack_result(result):

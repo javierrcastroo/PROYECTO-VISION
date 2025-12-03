@@ -21,7 +21,12 @@ from segmentation import (
 )
 from features import compute_feature_vector
 from classifier import knn_predict
-from storage import save_gesture_example, load_gesture_gallery, save_sequence_json
+from storage import (
+    save_gesture_example,
+    load_gesture_gallery,
+    save_sequence_json,
+    save_restart_request,
+)
 from collections import deque
 
 GESTURE_WINDOW_FRAMES = 150
@@ -30,6 +35,7 @@ TRIGGER_GESTURES = {"5dedos"}
 CONFIRM_GESTURE = "ok"
 REJECT_GESTURE = "nook"
 PRINT_GESTURE = "cool"
+RESTART_GESTURE = "demond"
 CONTROL_GESTURES = TRIGGER_GESTURES | {CONFIRM_GESTURE, REJECT_GESTURE, PRINT_GESTURE}
 TARGET_BOARD = os.environ.get("BATTLESHIP_TARGET", "1")
 FEEDBACK_FILE = os.path.join(ATTACKS_DIR, "last_result.json")
@@ -109,6 +115,7 @@ def main():
     attack_counters = {"T1": 0, "T2": 0}
     feedback_lines = []
     last_feedback_mtime = 0.0
+    game_finished = False
 
     def set_state(new_state, lines):
         nonlocal capture_state, status_lines
@@ -181,6 +188,12 @@ def main():
             next_target = None
             if fb_meta:
                 next_target = fb_meta.get("next_defender") or fb_meta.get("defender")
+                winner = fb_meta.get("winner")
+                status_flag = fb_meta.get("status")
+                game_finished = bool(winner) or status_flag == "finished"
+                if status_flag == "reset":
+                    game_finished = False
+                    attack_counters = {"T1": 0, "T2": 0}
             if next_target and next_target != current_target_board:
                 current_target_board = next_target
                 set_status(
@@ -189,6 +202,9 @@ def main():
                         "Standby: haz '5dedos' para activar el registro.",
                     ]
                 )
+        else:
+            if fb_meta and fb_meta.get("status") == "turn":
+                game_finished = False
 
         display_lines = status_lines + feedback_lines
         ui.draw_sequence_status(
@@ -213,6 +229,21 @@ def main():
         resolved_label = gesture_window.push(stable_label)
 
         if resolved_label is not None:
+            if game_finished and resolved_label == RESTART_GESTURE:
+                save_restart_request()
+                acciones.clear()
+                pending_candidate = None
+                attack_counters = {"T1": 0, "T2": 0}
+                game_finished = False
+                set_state(
+                    "STANDBY",
+                    [
+                        "Reinicio solicitado. Espera a que el tablero prepare nueva partida.",
+                        "Standby: haz '5dedos' para activar el registro.",
+                    ],
+                )
+                continue
+
             if capture_state == "STANDBY":
                 if resolved_label in TRIGGER_GESTURES:
                     set_state("CAPTURA", ["Sistema activo: muestra el primer gesto."])

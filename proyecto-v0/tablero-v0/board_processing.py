@@ -1,6 +1,9 @@
 # board_processing.py
 import cv2
+import math
 import numpy as np
+
+import board_state
 import board_tracker
 import object_tracker
 import board_ui
@@ -50,8 +53,10 @@ def process_all_boards(frame, boards_state_list, cam_mtx=None, dist=None, max_bo
             quad = binfo["quad"]
             slot["last_quad"] = quad
             slot["miss"] = 0
+            if binfo.get("ratio") is not None:
+                slot["cm_per_pix"] = binfo["ratio"]
             ship_two_mask_show, ship_one_mask_show, layout_info = process_single_board(
-                vis_all, frame, quad, slot, warp_size
+                vis_all, frame, quad, slot, warp_size, slot.get("cm_per_pix")
             )
             if layout_info is not None:
                 layouts.append(layout_info)
@@ -116,7 +121,7 @@ def _assign_detections_to_slots(boards_found, boards_state_list):
     return assignments
 
 
-def process_single_board(vis_img, frame_bgr, quad, slot, warp_size=500):
+def process_single_board(vis_img, frame_bgr, quad, slot, warp_size=500, cm_per_pix=None):
     """
     Procesa un tablero individual detectando centros de barcos de dos y una casilla
     con el mismo pipeline basado en blobs que teníamos antes: calibras con un ROI,
@@ -174,10 +179,13 @@ def process_single_board(vis_img, frame_bgr, quad, slot, warp_size=500):
     slot["ship_one_cells"] = sorted(set(ship_one_cells_raw))
 
     display_entries = []
-    for idx, label in enumerate(ship_two_labels, 1):
+    printable_entries = []
+    for idx, (pt, label) in enumerate(zip(ship_two_pts, ship_two_labels), 1):
         display_entries.append((f"B2-{idx}", label))
-    for idx, label in enumerate(ship_one_labels, 1):
+        printable_entries.append((f"B2-{idx}", label, _format_origin_offset(pt, cm_per_pix)))
+    for idx, (pt, label) in enumerate(zip(ship_one_pts, ship_one_labels), 1):
         display_entries.append((f"B1-{idx}", label))
+        printable_entries.append((f"B1-{idx}", label, _format_origin_offset(pt, cm_per_pix)))
 
     _annotate_detections(vis_img, warp_img, slot["name"], display_entries)
 
@@ -189,10 +197,13 @@ def process_single_board(vis_img, frame_bgr, quad, slot, warp_size=500):
     }
 
     if display_entries:
-        key = (slot["name"], tuple(display_entries))
+        key = (slot["name"], tuple(printable_entries))
         if last_display_entries.get(slot["name"]) != key:
-            for tag, label in display_entries:
-                print(f"[{slot['name']}] {tag} -> {label}")
+            for tag, label, offset_txt in printable_entries:
+                if offset_txt:
+                    print(f"[{slot['name']}] {tag} -> {label} | {offset_txt}")
+                else:
+                    print(f"[{slot['name']}] {tag} -> {label}")
             last_display_entries[slot["name"]] = key
 
     cv2.imshow(f"{slot['name']} aplanado", warp_img)
@@ -283,6 +294,28 @@ def _annotate_detections(vis_img, warp_img, slot_name, entries):
             1,
             cv2.LINE_AA,
         )
+
+
+def _format_origin_offset(point, cm_per_pix=None):
+    if board_state.GLOBAL_ORIGIN is None:
+        return None
+
+    ox, oy = board_state.GLOBAL_ORIGIN
+    px_dx = point[0] - ox
+    px_dy = point[1] - oy
+    px_dist = math.hypot(px_dx, px_dy)
+
+    if cm_per_pix:
+        cm_dx = px_dx * cm_per_pix
+        cm_dy = px_dy * cm_per_pix
+        cm_dist = px_dist * cm_per_pix
+        return f"offset ArUco dx={cm_dx:.1f}cm dy={cm_dy:.1f}cm dist={cm_dist:.1f}cm"
+
+    return f"offset ArUco dx={px_dx:.1f}px dy={px_dy:.1f}px dist={px_dist:.1f}px"
+
+
+def clear_display_cache():
+    last_display_entries.clear()
 
 
 def _format_cell_label(row, col):

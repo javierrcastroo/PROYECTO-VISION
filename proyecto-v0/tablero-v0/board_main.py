@@ -2,8 +2,8 @@
 import cv2
 import json
 import os
-import json
 import glob
+import time
 import numpy as np
 from collections import Counter
 
@@ -16,7 +16,8 @@ import board_processing as bp
 import aruco_utils
 import battleship_logic
 
-ATTACKS_DIR = "gestures"
+ATTACKS_DIR = os.path.join(os.path.dirname(__file__), "..", "ataques")
+LAST_RESULT_FILE = os.path.join(ATTACKS_DIR, "last_result.json")
 CAPTURE_FRAMES = 150
 
 def main():
@@ -49,6 +50,8 @@ def main():
     stabilized_layouts = None
     game_state = None
     processed_attacks = set()
+    last_validation_msgs = {}
+    last_status_lines_printed = None
     status_lines = [
         "Standby: coloca barcos y calibra HSV",
         f"Pulsa 's' para fijar el layout ({CAPTURE_FRAMES} frames)",
@@ -72,24 +75,17 @@ def main():
             warp_size=WARP_SIZE,
         )
 
-        if status == "capturing":
-            _accumulate_layouts(layouts, accumulation)
-            capture_frames_left = max(0, capture_frames_left - 1)
-            if capture_frames_left == 0:
-                stable_distributions = _compute_stable_distributions(accumulation)
-                battleship_logic.set_initial_layouts(stable_distributions)
-                status = "ready"
-
         validation_map = {}
         for layout in layouts:
             ok, msg = battleship_logic.evaluate_board(layout)
             validation_map[layout["name"]] = (ok, msg)
-            print(f"[{layout['name']}] {msg}")
+
+            if last_validation_msgs.get(layout["name"]) != msg:
+                print(f"[{layout['name']}] {msg}")
+                last_validation_msgs[layout["name"]] = msg
 
         if status == "CAPTURING":
             _accumulate_layouts(layouts, accumulation)
-
-        if status == "CAPTURING":
             capture_frames_left -= 1
             status_lines = [
                 f"Capturando layout estable ({capture_frames_left} frames restantes)",
@@ -102,13 +98,12 @@ def main():
                     "Layouts fijados. Empieza la partida.",
                     "Turno inicial: T1 ataca T2",
                 ]
+                _write_last_result(_snapshot_turn(game_state), status_lines, game_state)
 
         for slot in boards_state_list:
             if slot["name"] in validation_map and slot["last_quad"] is not None:
                 ok, msg = validation_map[slot["name"]]
                 board_ui.draw_validation_result(vis, slot["last_quad"], msg, ok)
-
-        process_pending_attacks(boards_state_list)
 
         # dibujar el origen global si lo tenemos
         if board_state.GLOBAL_ORIGIN is not None:
@@ -140,6 +135,11 @@ def main():
 
         board_ui.draw_board_hud(vis)
         _draw_status_lines(vis, status_lines)
+
+        if status_lines != last_status_lines_printed:
+            for line in status_lines:
+                print(line)
+            last_status_lines_printed = list(status_lines)
 
         # mostrar
         cv2.imshow("Tablero", vis)
@@ -313,6 +313,7 @@ def _process_new_attacks(game_state, processed_attacks):
         processed_attacks.add(fname)
 
         msgs = _format_attack_result(result)
+        _write_last_result(result, msgs, game_state)
 
         try:
             os.remove(fp)
@@ -345,6 +346,40 @@ def _format_attack_result(result):
         winner = result.get("winner")
         return [f"Partida terminada. Ganador: {winner}"]
     return ["Ataque procesado"]
+
+
+def _write_last_result(result, messages, game_state):
+    if result is None:
+        return
+
+    payload = {
+        "timestamp": int(result.get("timestamp", 0) or time.time()),
+        "messages": messages or [],
+        "attacker": result.get("attacker"),
+        "defender": result.get("defender"),
+        "cell": result.get("cell"),
+        "status": result.get("status"),
+    }
+
+    if game_state:
+        payload["next_attacker"] = game_state.get("current_attacker")
+        payload["next_defender"] = game_state.get("current_defender")
+        payload["winner"] = game_state.get("winner")
+
+    try:
+        with open(LAST_RESULT_FILE, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+    except OSError as exc:  # noqa: PERF203
+        print(f"[WARN] no se pudo escribir resultado en {LAST_RESULT_FILE}: {exc}")
+
+
+def _snapshot_turn(game_state):
+    return {
+        "timestamp": int(time.time()),
+        "attacker": game_state.get("current_attacker"),
+        "defender": game_state.get("current_defender"),
+        "status": "turn",
+    }
 
 if __name__ == "__main__":
     main()

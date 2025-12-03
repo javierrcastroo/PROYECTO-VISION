@@ -5,6 +5,9 @@ import board_tracker
 import object_tracker
 import board_ui
 
+# Recuerda el último listado de detecciones por tablero para evitar spam en consola
+last_display_entries = {}
+
 
 def process_all_boards(frame, boards_state_list, cam_mtx=None, dist=None, max_boards=2, warp_size=500):
     """
@@ -142,7 +145,7 @@ def process_single_board(vis_img, frame_bgr, quad, slot, warp_size=500):
         quad,
         object_tracker.current_ship_two_lower,
         object_tracker.current_ship_two_upper,
-        max_objs=2,
+        max_objs=4,
         min_area=40,
     )
 
@@ -151,7 +154,7 @@ def process_single_board(vis_img, frame_bgr, quad, slot, warp_size=500):
         quad,
         object_tracker.current_ship_one_lower,
         object_tracker.current_ship_one_upper,
-        max_objs=3,
+        max_objs=6,
         min_area=40,
     )
 
@@ -186,8 +189,11 @@ def process_single_board(vis_img, frame_bgr, quad, slot, warp_size=500):
     }
 
     if display_entries:
-        for tag, label in display_entries:
-            print(f"[{slot['name']}] {tag} -> {label}")
+        key = (slot["name"], tuple(display_entries))
+        if last_display_entries.get(slot["name"]) != key:
+            for tag, label in display_entries:
+                print(f"[{slot['name']}] {tag} -> {label}")
+            last_display_entries[slot["name"]] = key
 
     cv2.imshow(f"{slot['name']} aplanado", warp_img)
 

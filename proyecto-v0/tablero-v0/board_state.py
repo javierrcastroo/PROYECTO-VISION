@@ -14,6 +14,8 @@ def init_board_state(name):
         "cm_per_pix": None,
         "ship_two_cells": [],
         "ship_one_cells": [],
+        "ship_two_points": [],
+        "ship_one_points": [],
         "attacked_cells": set(),
         "hits": set(),
         "misses": set(),

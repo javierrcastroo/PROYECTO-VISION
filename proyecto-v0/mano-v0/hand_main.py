@@ -122,6 +122,30 @@ def main():
         capture_state = new_state
         status_lines = lines
         gesture_window.reset()
+    def _load_last_result(feedback_file, last_mtime):
+        if not os.path.exists(feedback_file):
+            return last_mtime, None, None
+
+        try:
+            mtime = os.path.getmtime(feedback_file)
+        except OSError:
+            return last_mtime, None, None
+
+        if mtime <= last_mtime:
+            return last_mtime, None, None
+
+        try:
+            with open(feedback_file, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return last_mtime, None, None
+
+        messages = payload.get("messages")
+        if not messages:
+            fallback = payload.get("status") or "Resultado recibido"
+            messages = [fallback]
+
+        return mtime, messages, payload
 
     def set_status(lines):
         nonlocal status_lines

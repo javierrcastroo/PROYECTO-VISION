@@ -2,8 +2,8 @@
 import cv2
 import json
 import os
-import json
 import glob
+import time
 import numpy as np
 from collections import Counter
 
@@ -16,7 +16,9 @@ import board_processing as bp
 import aruco_utils
 import battleship_logic
 
-ATTACKS_DIR = "gestures"
+ATTACKS_DIR = os.path.join(os.path.dirname(__file__), "..", "ataques")
+LAST_RESULT_FILE = os.path.join(ATTACKS_DIR, "last_result.json")
+RESTART_FILE = os.path.join(ATTACKS_DIR, "restart.json")
 CAPTURE_FRAMES = 150
 
 def main():
@@ -33,10 +35,7 @@ def main():
         
 
     # dos tableros
-    boards_state_list = [
-        board_state.init_board_state("T1"),
-        board_state.init_board_state("T2"),
-    ]
+    boards_state_list = _init_boards()
 
     cv2.namedWindow("Tablero")
     cv2.setMouseCallback("Tablero", board_ui.board_mouse_callback)
@@ -49,6 +48,8 @@ def main():
     stabilized_layouts = None
     game_state = None
     processed_attacks = set()
+    last_validation_msgs = {}
+    last_status_lines_printed = None
     status_lines = [
         "Standby: coloca barcos y calibra HSV",
         f"Pulsa 's' para fijar el layout ({CAPTURE_FRAMES} frames)",
@@ -72,24 +73,17 @@ def main():
             warp_size=WARP_SIZE,
         )
 
-        if status == "capturing":
-            _accumulate_layouts(layouts, accumulation)
-            capture_frames_left = max(0, capture_frames_left - 1)
-            if capture_frames_left == 0:
-                stable_distributions = _compute_stable_distributions(accumulation)
-                battleship_logic.set_initial_layouts(stable_distributions)
-                status = "ready"
-
         validation_map = {}
         for layout in layouts:
             ok, msg = battleship_logic.evaluate_board(layout)
             validation_map[layout["name"]] = (ok, msg)
-            print(f"[{layout['name']}] {msg}")
+
+            if last_validation_msgs.get(layout["name"]) != msg:
+                print(f"[{layout['name']}] {msg}")
+                last_validation_msgs[layout["name"]] = msg
 
         if status == "CAPTURING":
             _accumulate_layouts(layouts, accumulation)
-
-        if status == "CAPTURING":
             capture_frames_left -= 1
             status_lines = [
                 f"Capturando layout estable ({capture_frames_left} frames restantes)",
@@ -102,13 +96,12 @@ def main():
                     "Layouts fijados. Empieza la partida.",
                     "Turno inicial: T1 ataca T2",
                 ]
+                _write_last_result(_snapshot_turn(game_state), status_lines, game_state)
 
         for slot in boards_state_list:
             if slot["name"] in validation_map and slot["last_quad"] is not None:
                 ok, msg = validation_map[slot["name"]]
                 board_ui.draw_validation_result(vis, slot["last_quad"], msg, ok)
-
-        process_pending_attacks(boards_state_list)
 
         # dibujar el origen global si lo tenemos
         if board_state.GLOBAL_ORIGIN is not None:
@@ -138,8 +131,26 @@ def main():
             if pending_msg:
                 status_lines = pending_msg
 
+            if game_state.get("finished") and _consume_restart_request():
+                (
+                    boards_state_list,
+                    accumulation,
+                    stabilized_layouts,
+                    game_state,
+                    processed_attacks,
+                    status,
+                    status_lines,
+                    last_status_lines_printed,
+                    capture_frames_left,
+                ) = _restart_game()
+
         board_ui.draw_board_hud(vis)
         _draw_status_lines(vis, status_lines)
+
+        if status_lines != last_status_lines_printed:
+            for line in status_lines:
+                print(line)
+            last_status_lines_printed = list(status_lines)
 
         # mostrar
         cv2.imshow("Tablero", vis)
@@ -162,6 +173,18 @@ def main():
             status_lines = [
                 f"Inicio de captura de layout durante {CAPTURE_FRAMES} frames",
             ]
+        elif key == ord("r"):
+            (
+                boards_state_list,
+                accumulation,
+                stabilized_layouts,
+                game_state,
+                processed_attacks,
+                status,
+                status_lines,
+                last_status_lines_printed,
+                capture_frames_left,
+            ) = _restart_game()
         else:
             handle_keys(key, frame)
 
@@ -223,6 +246,13 @@ def handle_keys(key, frame):
         else:
             print("[WARN] dibuja ROI sobre la municion")
 
+
+
+def _init_boards():
+    return [
+        board_state.init_board_state("T1"),
+        board_state.init_board_state("T2"),
+    ]
 
 
 def _snapshot_layout(layout):
@@ -313,12 +343,93 @@ def _process_new_attacks(game_state, processed_attacks):
         processed_attacks.add(fname)
 
         msgs = _format_attack_result(result)
+        _write_last_result(result, msgs, game_state)
 
         try:
             os.remove(fp)
         except OSError:
             pass
     return msgs
+
+
+def _consume_restart_request():
+    if not os.path.exists(RESTART_FILE):
+        return False
+    try:
+        os.remove(RESTART_FILE)
+    except OSError:
+        pass
+    return True
+
+
+def _clear_pending_attack_files():
+    try:
+        for fp in glob.glob(os.path.join(ATTACKS_DIR, "T*_*.json")):
+            os.remove(fp)
+    except OSError:
+        pass
+
+
+def _restart_game():
+    _reset_calibration_state()
+
+    boards_state_list = _init_boards()
+    accumulation = {"T1": [], "T2": []}
+    stabilized_layouts = None
+    game_state = None
+    processed_attacks = set()
+    board_state.GLOBAL_ORIGIN = None
+    board_state.GLOBAL_ORIGIN_MISS = 0
+    status = "STANDBY"
+    status_lines = [
+        "Reinicio solicitado. Coloca de nuevo los tableros y calibra si es necesario.",
+        f"Pulsa 's' para fijar el layout ({CAPTURE_FRAMES} frames)",
+    ]
+    capture_frames_left = 0
+
+    _clear_pending_attack_files()
+    _write_last_result(
+        {"timestamp": int(time.time()), "status": "reset"},
+        status_lines,
+        game_state,
+    )
+    last_status_lines_printed = None
+
+    return (
+        boards_state_list,
+        accumulation,
+        stabilized_layouts,
+        game_state,
+        processed_attacks,
+        status,
+        status_lines,
+        last_status_lines_printed,
+        capture_frames_left,
+    )
+
+
+def _reset_calibration_state():
+    import board_tracker
+    import object_tracker
+
+    board_tracker.current_lower = board_tracker.DEFAULT_LOWER.copy()
+    board_tracker.current_upper = board_tracker.DEFAULT_UPPER.copy()
+
+    object_tracker.current_ship_two_lower = object_tracker.SHIP_TWO_LOWER_DEFAULT.copy()
+    object_tracker.current_ship_two_upper = object_tracker.SHIP_TWO_UPPER_DEFAULT.copy()
+    object_tracker.current_ship_one_lower = object_tracker.SHIP_ONE_LOWER_DEFAULT.copy()
+    object_tracker.current_ship_one_upper = object_tracker.SHIP_ONE_UPPER_DEFAULT.copy()
+    object_tracker.current_ammo_lower = object_tracker.AMMO_LOWER_DEFAULT.copy()
+    object_tracker.current_ammo_upper = object_tracker.AMMO_UPPER_DEFAULT.copy()
+    object_tracker.current_origin_lower = object_tracker.ORIG_LOWER_DEFAULT.copy()
+    object_tracker.current_origin_upper = object_tracker.ORIG_UPPER_DEFAULT.copy()
+
+    board_ui.board_roi_selecting = False
+    board_ui.board_roi_defined = False
+    board_ui.bx_start = board_ui.by_start = board_ui.bx_end = board_ui.by_end = 0
+    board_ui.measure_points = []
+
+    bp.clear_display_cache()
 
 
 def _format_attack_result(result):
@@ -345,6 +456,40 @@ def _format_attack_result(result):
         winner = result.get("winner")
         return [f"Partida terminada. Ganador: {winner}"]
     return ["Ataque procesado"]
+
+
+def _write_last_result(result, messages, game_state):
+    if result is None:
+        return
+
+    payload = {
+        "timestamp": int(result.get("timestamp", 0) or time.time()),
+        "messages": messages or [],
+        "attacker": result.get("attacker"),
+        "defender": result.get("defender"),
+        "cell": result.get("cell"),
+        "status": result.get("status"),
+    }
+
+    if game_state:
+        payload["next_attacker"] = game_state.get("current_attacker")
+        payload["next_defender"] = game_state.get("current_defender")
+        payload["winner"] = game_state.get("winner")
+
+    try:
+        with open(LAST_RESULT_FILE, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+    except OSError as exc:  # noqa: PERF203
+        print(f"[WARN] no se pudo escribir resultado en {LAST_RESULT_FILE}: {exc}")
+
+
+def _snapshot_turn(game_state):
+    return {
+        "timestamp": int(time.time()),
+        "attacker": game_state.get("current_attacker"),
+        "defender": game_state.get("current_defender"),
+        "status": "turn",
+    }
 
 if __name__ == "__main__":
     main()

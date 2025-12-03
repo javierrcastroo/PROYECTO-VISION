@@ -20,6 +20,10 @@ GESTURES_DIR = os.path.join(os.path.dirname(__file__), "gestures")
 # carpeta donde se guardan las secuencias grabadas
 SEQUENCES_DIR = os.path.join(os.path.dirname(__file__), "sequences")
 
+# carpeta compartida donde se guardan los ataques confirmados
+ATTACKS_DIR = os.path.join(os.path.dirname(__file__), "..", "ataques")
+
 # asegúrate de que existan
 os.makedirs(GESTURES_DIR, exist_ok=True)
 os.makedirs(SEQUENCES_DIR, exist_ok=True)
+os.makedirs(ATTACKS_DIR, exist_ok=True)

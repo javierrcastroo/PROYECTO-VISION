@@ -11,6 +11,7 @@ from hand_config import (
     CONFIDENCE_THRESHOLD,
     USE_UNDISTORT_HAND,
     HAND_CAMERA_PARAMS_PATH,
+    ATTACKS_DIR,
 )
 
 import ui
@@ -20,7 +21,12 @@ from segmentation import (
 )
 from features import compute_feature_vector
 from classifier import knn_predict
-from storage import save_gesture_example, load_gesture_gallery, save_sequence_json
+from storage import (
+    save_gesture_example,
+    load_gesture_gallery,
+    save_sequence_json,
+    save_restart_request,
+)
 from collections import deque
 
 GESTURE_WINDOW_FRAMES = 150
@@ -29,47 +35,10 @@ TRIGGER_GESTURES = {"5dedos"}
 CONFIRM_GESTURE = "ok"
 REJECT_GESTURE = "nook"
 PRINT_GESTURE = "cool"
+RESTART_GESTURE = "demond"
 CONTROL_GESTURES = TRIGGER_GESTURES | {CONFIRM_GESTURE, REJECT_GESTURE, PRINT_GESTURE}
-SHARED_ATTACK_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "shared_attacks"))
 TARGET_BOARD = os.environ.get("BATTLESHIP_TARGET", "1")
-
-COORD_MAP = {
-    "0dedos": 0,
-    "1dedo": 1,
-    "2dedos": 2,
-    "3dedos": 3,
-    "4dedos": 4,
-}
-
-
-def sequence_to_coord(seq):
-    if len(seq) != 2:
-        return None
-    col_label, row_label = seq
-    if col_label not in COORD_MAP or row_label not in COORD_MAP:
-        return None
-    col = COORD_MAP[col_label]
-    row = COORD_MAP[row_label]
-    return row, col
-
-COORD_MAP = {
-    "0dedos": 0,
-    "1dedo": 1,
-    "2dedos": 2,
-    "3dedos": 3,
-    "4dedos": 4,
-}
-
-
-def sequence_to_coord(seq):
-    if len(seq) != 2:
-        return None
-    col_label, row_label = seq
-    if col_label not in COORD_MAP or row_label not in COORD_MAP:
-        return None
-    col = COORD_MAP[col_label]
-    row = COORD_MAP[row_label]
-    return row, col
+FEEDBACK_FILE = os.path.join(ATTACKS_DIR, "last_result.json")
 
 COORD_MAP = {
     "0dedos": 0,
@@ -144,6 +113,9 @@ def main():
     status_lines = ["Standby: haz '5dedos' para activar el registro."]
     current_target_board = "T2"
     attack_counters = {"T1": 0, "T2": 0}
+    feedback_lines = []
+    last_feedback_mtime = 0.0
+    game_finished = False
 
     def set_state(new_state, lines):
         nonlocal capture_state, status_lines
@@ -204,12 +176,43 @@ def main():
             current_label,
         )
         ui.draw_prediction(vis, stable_label, best_dist if best_dist else 0.0)
+
+        last_feedback_mtime, new_feedback, fb_meta = _load_last_result(
+            FEEDBACK_FILE, last_feedback_mtime
+        )
+        if new_feedback:
+            feedback_lines = new_feedback
+            for line in feedback_lines:
+                print(f"[RESULTADO] {line}")
+
+            next_target = None
+            if fb_meta:
+                next_target = fb_meta.get("next_defender") or fb_meta.get("defender")
+                winner = fb_meta.get("winner")
+                status_flag = fb_meta.get("status")
+                game_finished = bool(winner) or status_flag == "finished"
+                if status_flag == "reset":
+                    game_finished = False
+                    attack_counters = {"T1": 0, "T2": 0}
+            if next_target and next_target != current_target_board:
+                current_target_board = next_target
+                set_status(
+                    [
+                        f"Objetivo segun tablero: {current_target_board}",
+                        "Standby: haz '5dedos' para activar el registro.",
+                    ]
+                )
+        else:
+            if fb_meta and fb_meta.get("status") == "turn":
+                game_finished = False
+
+        display_lines = status_lines + feedback_lines
         ui.draw_sequence_status(
             vis,
             acciones,
             capture_state,
             pending_candidate,
-            status_lines,
+            display_lines,
             gesture_window.progress(),
         )
 
@@ -226,6 +229,21 @@ def main():
         resolved_label = gesture_window.push(stable_label)
 
         if resolved_label is not None:
+            if game_finished and resolved_label == RESTART_GESTURE:
+                save_restart_request()
+                acciones.clear()
+                pending_candidate = None
+                attack_counters = {"T1": 0, "T2": 0}
+                game_finished = False
+                set_state(
+                    "STANDBY",
+                    [
+                        "Reinicio solicitado. Espera a que el tablero prepare nueva partida.",
+                        "Standby: haz '5dedos' para activar el registro.",
+                    ],
+                )
+                continue
+
             if capture_state == "STANDBY":
                 if resolved_label in TRIGGER_GESTURES:
                     set_state("CAPTURA", ["Sistema activo: muestra el primer gesto."])
@@ -344,16 +362,35 @@ def main():
             }
             current_label = mapping[key]
 
-        elif key == ord('t'):
-            current_target_board = "T1" if current_target_board == "T2" else "T2"
-            set_status([
-                f"Objetivo alternado a {current_target_board}",
-                "Standby: haz '5dedos' para activar el registro.",
-            ])
-
     cap.release()
     cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":
     main()
+
+
+def _load_last_result(feedback_file, last_mtime):
+    if not os.path.exists(feedback_file):
+        return last_mtime, None, None
+
+    try:
+        mtime = os.path.getmtime(feedback_file)
+    except OSError:
+        return last_mtime, None, None
+
+    if mtime <= last_mtime:
+        return last_mtime, None, None
+
+    try:
+        with open(feedback_file, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return last_mtime, None, None
+
+    messages = payload.get("messages")
+    if not messages:
+        fallback = payload.get("status") or "Resultado recibido"
+        messages = [fallback]
+
+    return mtime, messages, payload

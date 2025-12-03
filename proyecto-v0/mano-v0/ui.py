@@ -70,7 +70,25 @@ def draw_hand_box(img, mask):
 
 def draw_sequence_status(img, acciones, capture_state, pending, status_lines, progress):
     y = 100
-    seq_text = ", ".join(acciones) if acciones else "(vacia)"
+
+    def _format_sequence(seq):
+        if not seq:
+            return "(vacia)"
+        letter_map = {
+            "0dedos": "A",
+            "1dedo": "B",
+            "2dedos": "C",
+            "3dedos": "D",
+            "4dedos": "E",
+        }
+        display = list(seq)
+        if display:
+            first = display[0]
+            if first in letter_map:
+                display[0] = letter_map[first]
+        return ", ".join(display)
+
+    seq_text = _format_sequence(acciones)
     cv2.putText(img,
                 f"Secuencia (max 2): {seq_text}",
                 (10, y),

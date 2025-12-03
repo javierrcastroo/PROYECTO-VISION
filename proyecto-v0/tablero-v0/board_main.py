@@ -71,6 +71,7 @@ def main():
             dist=dist,
             max_boards=2,
             warp_size=WARP_SIZE,
+            print_detections=False,
         )
 
         validation_map = {}
@@ -96,6 +97,7 @@ def main():
                     "Layouts fijados. Empieza la partida.",
                     "Turno inicial: T1 ataca T2",
                 ]
+                _log_stabilized_layouts(stabilized_layouts, boards_state_list)
                 _write_last_result(_snapshot_turn(game_state), status_lines, game_state)
 
         for slot in boards_state_list:
@@ -297,6 +299,36 @@ def _select_stable_layouts(samples_map, boards_state_list):
             "board_size": samples[0].get("board_size", 5),
         }
     return stable
+
+
+def _log_stabilized_layouts(stable_layouts, boards_state_list):
+    if not stable_layouts:
+        return
+
+    print("[INFO] Layouts capturados tras estabilizar 150 frames:")
+    for slot in boards_state_list:
+        name = slot.get("name", "?")
+        layout = stable_layouts.get(name, {})
+        board_size = layout.get("board_size", 5)
+        ship_two_cells = layout.get("ship_two_cells", [])
+        ship_one_cells = layout.get("ship_one_cells", [])
+
+        def _fmt_cells(cells):
+            return ", ".join(bp._format_cell_label(r, c) for r, c in cells) or "(ninguno)"
+
+        print(f"[{name}] Tablero {board_size}x{board_size}")
+        print(f"    Barcos x2: {_fmt_cells(ship_two_cells)}")
+        print(f"    Barcos x1: {_fmt_cells(ship_one_cells)}")
+
+        def _log_points(tag, points):
+            if not points:
+                print(f"    {tag}: sin coordenadas detectadas")
+                return
+            for idx, (px, py) in enumerate(points, 1):
+                print(f"    {tag}-{idx}: ({px:.1f}, {py:.1f})")
+
+        _log_points("Coordenadas x2", slot.get("ship_two_points", []))
+        _log_points("Coordenadas x1", slot.get("ship_one_points", []))
 
 
 def _draw_status_lines(vis, lines):

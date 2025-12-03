@@ -12,7 +12,15 @@ import board_ui
 last_display_entries = {}
 
 
-def process_all_boards(frame, boards_state_list, cam_mtx=None, dist=None, max_boards=2, warp_size=500):
+def process_all_boards(
+    frame,
+    boards_state_list,
+    cam_mtx=None,
+    dist=None,
+    max_boards=2,
+    warp_size=500,
+    print_detections=True,
+):
     """
     Detecta varios tableros, los asigna a los slots existentes (T1, T2),
     procesa cada uno y devuelve todo para mostrar.
@@ -56,7 +64,13 @@ def process_all_boards(frame, boards_state_list, cam_mtx=None, dist=None, max_bo
             if binfo.get("ratio") is not None:
                 slot["cm_per_pix"] = binfo["ratio"]
             ship_two_mask_show, ship_one_mask_show, layout_info = process_single_board(
-                vis_all, frame, quad, slot, warp_size, slot.get("cm_per_pix")
+                vis_all,
+                frame,
+                quad,
+                slot,
+                warp_size,
+                slot.get("cm_per_pix"),
+                print_detections=print_detections,
             )
             if layout_info is not None:
                 layouts.append(layout_info)
@@ -121,7 +135,15 @@ def _assign_detections_to_slots(boards_found, boards_state_list):
     return assignments
 
 
-def process_single_board(vis_img, frame_bgr, quad, slot, warp_size=500, cm_per_pix=None):
+def process_single_board(
+    vis_img,
+    frame_bgr,
+    quad,
+    slot,
+    warp_size=500,
+    cm_per_pix=None,
+    print_detections=True,
+):
     """
     Procesa un tablero individual detectando centros de barcos de dos y una casilla
     con el mismo pipeline basado en blobs que teníamos antes: calibras con un ROI,
@@ -177,6 +199,8 @@ def process_single_board(vis_img, frame_bgr, quad, slot, warp_size=500, cm_per_p
 
     slot["ship_two_cells"] = sorted(set(ship_two_cells_raw))
     slot["ship_one_cells"] = sorted(set(ship_one_cells_raw))
+    slot["ship_two_points"] = list(ship_two_pts)
+    slot["ship_one_points"] = list(ship_one_pts)
 
     display_entries = []
     printable_entries = []
@@ -196,7 +220,7 @@ def process_single_board(vis_img, frame_bgr, quad, slot, warp_size=500, cm_per_p
         "board_size": board_tracker.BOARD_SQUARES,
     }
 
-    if display_entries:
+    if print_detections and display_entries:
         key = (slot["name"], tuple(printable_entries))
         if last_display_entries.get(slot["name"]) != key:
             for tag, label, offset_txt in printable_entries:
@@ -219,6 +243,8 @@ def fallback_or_decay(slot, vis_img):
         slot["miss"] += 1
         slot["ship_two_cells"] = []
         slot["ship_one_cells"] = []
+        slot["ship_two_points"] = []
+        slot["ship_one_points"] = []
 
 
 def draw_quad(img, quad, color=(0, 255, 255)):
@@ -241,9 +267,15 @@ def _map_points_to_cells(points, H_warp, warp_size):
 
     cells = []
     labels = []
+
+    # Anclamos el origen en la esquina superior izquierda (A1) y
+    # avanzamos letras hacia la derecha y números hacia abajo.
+    def _cell_from_axis(coord):
+        return _clip_cell_index(int(np.floor(coord / cell_size)), n)
+
     for wx, wy in warped:
-        col = _clip_cell_index(int(np.floor(wx / cell_size)), n)
-        row = _clip_cell_index(int(np.floor(wy / cell_size)), n)
+        col = _cell_from_axis(wx)
+        row = _cell_from_axis(wy)
         cells.append((row, col))
         labels.append(_format_cell_label(row, col))
     return cells, labels

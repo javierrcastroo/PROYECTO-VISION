@@ -48,7 +48,6 @@ def main():
     stabilized_layouts = None
     game_state = None
     processed_attacks = set()
-    last_validation_msgs = {}
     last_status_lines_printed = None
     status_lines = [
         "Standby: coloca barcos y calibra HSV",
@@ -78,10 +77,6 @@ def main():
         for layout in layouts:
             ok, msg = battleship_logic.evaluate_board(layout)
             validation_map[layout["name"]] = (ok, msg)
-
-            if last_validation_msgs.get(layout["name"]) != msg:
-                print(f"[{layout['name']}] {msg}")
-                last_validation_msgs[layout["name"]] = msg
 
         if status == "CAPTURING":
             _accumulate_layouts(layouts, accumulation)

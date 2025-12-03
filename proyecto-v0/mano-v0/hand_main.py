@@ -11,6 +11,7 @@ from hand_config import (
     CONFIDENCE_THRESHOLD,
     USE_UNDISTORT_HAND,
     HAND_CAMERA_PARAMS_PATH,
+    ATTACKS_DIR,
 )
 
 import ui
@@ -30,46 +31,8 @@ CONFIRM_GESTURE = "ok"
 REJECT_GESTURE = "nook"
 PRINT_GESTURE = "cool"
 CONTROL_GESTURES = TRIGGER_GESTURES | {CONFIRM_GESTURE, REJECT_GESTURE, PRINT_GESTURE}
-SHARED_ATTACK_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "shared_attacks"))
 TARGET_BOARD = os.environ.get("BATTLESHIP_TARGET", "1")
-
-COORD_MAP = {
-    "0dedos": 0,
-    "1dedo": 1,
-    "2dedos": 2,
-    "3dedos": 3,
-    "4dedos": 4,
-}
-
-
-def sequence_to_coord(seq):
-    if len(seq) != 2:
-        return None
-    col_label, row_label = seq
-    if col_label not in COORD_MAP or row_label not in COORD_MAP:
-        return None
-    col = COORD_MAP[col_label]
-    row = COORD_MAP[row_label]
-    return row, col
-
-COORD_MAP = {
-    "0dedos": 0,
-    "1dedo": 1,
-    "2dedos": 2,
-    "3dedos": 3,
-    "4dedos": 4,
-}
-
-
-def sequence_to_coord(seq):
-    if len(seq) != 2:
-        return None
-    col_label, row_label = seq
-    if col_label not in COORD_MAP or row_label not in COORD_MAP:
-        return None
-    col = COORD_MAP[col_label]
-    row = COORD_MAP[row_label]
-    return row, col
+FEEDBACK_FILE = os.path.join(ATTACKS_DIR, "last_result.json")
 
 COORD_MAP = {
     "0dedos": 0,
@@ -144,6 +107,8 @@ def main():
     status_lines = ["Standby: haz '5dedos' para activar el registro."]
     current_target_board = "T2"
     attack_counters = {"T1": 0, "T2": 0}
+    feedback_lines = []
+    last_feedback_mtime = 0.0
 
     def set_state(new_state, lines):
         nonlocal capture_state, status_lines
@@ -204,12 +169,34 @@ def main():
             current_label,
         )
         ui.draw_prediction(vis, stable_label, best_dist if best_dist else 0.0)
+
+        last_feedback_mtime, new_feedback, fb_meta = _load_last_result(
+            FEEDBACK_FILE, last_feedback_mtime
+        )
+        if new_feedback:
+            feedback_lines = new_feedback
+            for line in feedback_lines:
+                print(f"[RESULTADO] {line}")
+
+            next_target = None
+            if fb_meta:
+                next_target = fb_meta.get("next_defender") or fb_meta.get("defender")
+            if next_target and next_target != current_target_board:
+                current_target_board = next_target
+                set_status(
+                    [
+                        f"Objetivo segun tablero: {current_target_board}",
+                        "Standby: haz '5dedos' para activar el registro.",
+                    ]
+                )
+
+        display_lines = status_lines + feedback_lines
         ui.draw_sequence_status(
             vis,
             acciones,
             capture_state,
             pending_candidate,
-            status_lines,
+            display_lines,
             gesture_window.progress(),
         )
 
@@ -344,16 +331,35 @@ def main():
             }
             current_label = mapping[key]
 
-        elif key == ord('t'):
-            current_target_board = "T1" if current_target_board == "T2" else "T2"
-            set_status([
-                f"Objetivo alternado a {current_target_board}",
-                "Standby: haz '5dedos' para activar el registro.",
-            ])
-
     cap.release()
     cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":
     main()
+
+
+def _load_last_result(feedback_file, last_mtime):
+    if not os.path.exists(feedback_file):
+        return last_mtime, None, None
+
+    try:
+        mtime = os.path.getmtime(feedback_file)
+    except OSError:
+        return last_mtime, None, None
+
+    if mtime <= last_mtime:
+        return last_mtime, None, None
+
+    try:
+        with open(feedback_file, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return last_mtime, None, None
+
+    messages = payload.get("messages")
+    if not messages:
+        fallback = payload.get("status") or "Resultado recibido"
+        messages = [fallback]
+
+    return mtime, messages, payload

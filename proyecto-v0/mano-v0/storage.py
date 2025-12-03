@@ -3,9 +3,10 @@ import os
 import time
 import json
 import numpy as np
-from hand_config import GESTURES_DIR
+from hand_config import GESTURES_DIR, ATTACKS_DIR
 
 os.makedirs(GESTURES_DIR, exist_ok=True)
+os.makedirs(ATTACKS_DIR, exist_ok=True)
 
 def save_gesture_example(feature_vec, label, save_dir=GESTURES_DIR):
     ts = int(time.time() * 1000)
@@ -27,7 +28,7 @@ def load_gesture_gallery(save_dir=GESTURES_DIR):
 
 def save_sequence_json(
     acciones,
-    out_dir="gestures",
+    out_dir=ATTACKS_DIR,
     target_name=None,
     shot_number=None,
     row=None,

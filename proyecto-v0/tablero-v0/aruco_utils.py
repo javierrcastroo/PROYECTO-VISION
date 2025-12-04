@@ -3,15 +3,15 @@ import cv2
 import numpy as np
 import board_state
 
-# Diccionario de ArUco que vamos a usar 
+# Diccionario de ArUco que vamos a usar
 _ARUCO_DICT = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_5X5_100)
 _ARUCO_PARAMS = cv2.aruco.DetectorParameters()
 
 # ID del marcador que usaremos como origen global
-ARUCO_ORIGIN_ID = 2
+ARUCO_ORIGEN_ID = 2
 
 
-def detect_aruco_origin(frame, aruco_id=ARUCO_ORIGIN_ID, draw=True):
+def detectar_origen_aruco(frame, aruco_id=ARUCO_ORIGEN_ID, dibujar=True):
     """
     Detecta en 'frame' un marcador ArUco con ID = aruco_id.
     Si lo encuentra:
@@ -37,7 +37,7 @@ def detect_aruco_origin(frame, aruco_id=ARUCO_ORIGIN_ID, draw=True):
             cx = int((tl[0] + br[0]) / 2.0)
             cy = int((tl[1] + br[1]) / 2.0)
 
-            if draw:
+            if dibujar:
                 cv2.polylines(frame, [pts.astype(int)], True, (0, 255, 0), 2)
                 cv2.circle(frame, (cx, cy), 6, (0, 255, 0), -1)
                 cv2.putText(frame, f"ArUco {marker_id}", (cx + 10, cy - 10),
@@ -48,16 +48,16 @@ def detect_aruco_origin(frame, aruco_id=ARUCO_ORIGIN_ID, draw=True):
     return False, None
 
 
-def update_global_origin_from_aruco(frame, aruco_id=ARUCO_ORIGIN_ID):
+def actualizar_origen_global_desde_aruco(frame, aruco_id=ARUCO_ORIGEN_ID):
     """
-    Llama a detect_aruco_origin y, si lo encuentra, actualiza board_state.GLOBAL_ORIGIN.
+    Llama a detectar_origen_aruco y, si lo encuentra, actualiza board_state.ORIGEN_GLOBAL.
     Si no lo ve un frame, aguanta unos cuantos antes de borrarlo.
     """
-    ok, pt = detect_aruco_origin(frame, aruco_id=aruco_id, draw=True)
+    ok, pt = detectar_origen_aruco(frame, aruco_id=aruco_id, dibujar=True)
     if ok:
-        board_state.GLOBAL_ORIGIN = pt
-        board_state.GLOBAL_ORIGIN_MISS = 0
+        board_state.ORIGEN_GLOBAL = pt
+        board_state.ORIGEN_GLOBAL_FALLOS = 0
     else:
-        board_state.GLOBAL_ORIGIN_MISS += 1
-        if board_state.GLOBAL_ORIGIN_MISS > board_state.GLOBAL_ORIGIN_MAX_MISS:
-            board_state.GLOBAL_ORIGIN = None
+        board_state.ORIGEN_GLOBAL_FALLOS += 1
+        if board_state.ORIGEN_GLOBAL_FALLOS > board_state.ORIGEN_GLOBAL_MAX_FALLOS:
+            board_state.ORIGEN_GLOBAL = None

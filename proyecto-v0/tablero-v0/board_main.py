@@ -9,7 +9,11 @@ from collections import Counter
 
 CAPTURE_BUFFER_FRAMES = 150
 
-from board_config import USE_UNDISTORT_BOARD, BOARD_CAMERA_PARAMS_PATH, WARP_SIZE
+from board_config import (
+    TAMANO_WARP,
+    RUTA_PARAMETROS_CAMARA_TABLERO,
+    USAR_CORRECCION_DISTORSION_TABLERO,
+)
 import board_ui
 import board_state
 import board_processing as bp
@@ -28,8 +32,8 @@ def main():
 
     # cargar calibracion de camara
     mtx = dist = None
-    if USE_UNDISTORT_BOARD and os.path.exists(BOARD_CAMERA_PARAMS_PATH):
-        data = np.load(BOARD_CAMERA_PARAMS_PATH)
+    if USAR_CORRECCION_DISTORSION_TABLERO and os.path.exists(RUTA_PARAMETROS_CAMARA_TABLERO):
+        data = np.load(RUTA_PARAMETROS_CAMARA_TABLERO)
         mtx = data["camera_matrix"]
         dist = data["dist_coeffs"]
         
@@ -38,18 +42,18 @@ def main():
     boards_state_list = _init_boards()
 
     cv2.namedWindow("Tablero")
-    cv2.setMouseCallback("Tablero", board_ui.board_mouse_callback)
+    cv2.setMouseCallback("Tablero", board_ui.callback_raton_tablero)
 
     os.makedirs(ATTACKS_DIR, exist_ok=True)
 
-    status = "STANDBY"  # STANDBY -> CAPTURING -> PLAYING
-    capture_frames_left = 0
-    accumulation = {"T1": [], "T2": []}
-    stabilized_layouts = None
-    game_state = None
-    processed_attacks = set()
-    last_status_lines_printed = None
-    status_lines = [
+    estado = "ESPERA"  # ESPERA -> CAPTURA -> JUEGO
+    frames_captura_restantes = 0
+    acumulacion = {"T1": [], "T2": []}
+    distribuciones_estables = None
+    estado_partida = None
+    ataques_procesados = set()
+    ultimas_lineas_estado = None
+    lineas_estado = [
         "Standby: coloca barcos y calibra HSV",
         f"Pulsa 's' para fijar el layout ({CAPTURE_FRAMES} frames)",
     ]
@@ -60,49 +64,49 @@ def main():
             break
 
         # detectar el ORIGEN con ArUco cada frame
-        aruco_utils.update_global_origin_from_aruco(frame, aruco_id=2)
+        aruco_utils.actualizar_origen_global_desde_aruco(frame, aruco_id=2)
 
         # procesar todos los tableros con el origen global actual
-        vis, mask_b, mask_ship2, mask_ship1, mask_m, layouts = bp.process_all_boards(
+        vis, mask_b, mask_ship2, mask_ship1, mask_m, layouts = bp.procesar_todos_los_tableros(
             frame,
             boards_state_list,
-            cam_mtx=mtx,
-            dist=dist,
-            max_boards=2,
-            warp_size=WARP_SIZE,
-            print_detections=False,
+            matriz_camara=mtx,
+            coef_distorsion=dist,
+            max_tableros=2,
+            tamano_warp=TAMANO_WARP,
+            imprimir_detecciones=False,
         )
 
         validation_map = {}
         for layout in layouts:
-            ok, msg = battleship_logic.evaluate_board(layout)
+            ok, msg = battleship_logic.evaluar_tablero(layout)
             validation_map[layout["name"]] = (ok, msg)
 
-        if status == "CAPTURING":
-            _accumulate_layouts(layouts, accumulation)
-            capture_frames_left -= 1
-            status_lines = [
-                f"Capturando layout estable ({capture_frames_left} frames restantes)",
+        if estado == "CAPTURA":
+            _acumular_layouts(layouts, acumulacion)
+            frames_captura_restantes -= 1
+            lineas_estado = [
+                f"Capturando layout estable ({frames_captura_restantes} frames restantes)",
             ]
-            if capture_frames_left <= 0:
-                stabilized_layouts = _select_stable_layouts(accumulation, boards_state_list)
-                game_state = battleship_logic.init_game_state(stabilized_layouts)
-                status = "PLAYING"
-                status_lines = [
+            if frames_captura_restantes <= 0:
+                distribuciones_estables = _seleccionar_layouts_estables(acumulacion, boards_state_list)
+                estado_partida = battleship_logic.inicializar_estado_partida(distribuciones_estables)
+                estado = "JUEGO"
+                lineas_estado = [
                     "Layouts fijados. Empieza la partida.",
                     "Turno inicial: T1 ataca T2",
                 ]
-                _log_stabilized_layouts(stabilized_layouts, boards_state_list)
-                _write_last_result(_snapshot_turn(game_state), status_lines, game_state)
+                _registrar_layouts_estables(distribuciones_estables, boards_state_list)
+                _escribir_ultimo_resultado(_capturar_estado_turno(estado_partida), lineas_estado, estado_partida)
 
         for slot in boards_state_list:
             if slot["name"] in validation_map and slot["last_quad"] is not None:
                 ok, msg = validation_map[slot["name"]]
-                board_ui.draw_validation_result(vis, slot["last_quad"], msg, ok)
+                board_ui.dibujar_resultado_validacion(vis, slot["last_quad"], msg, ok)
 
         # dibujar el origen global si lo tenemos
-        if board_state.GLOBAL_ORIGIN is not None:
-            gx, gy = board_state.GLOBAL_ORIGIN
+        if board_state.ORIGEN_GLOBAL is not None:
+            gx, gy = board_state.ORIGEN_GLOBAL
             cv2.circle(vis, (int(gx), int(gy)), 10, (0, 255, 0), -1)
             cv2.putText(
                 vis,
@@ -114,40 +118,40 @@ def main():
                 2,
             )
 
-        if status == "PLAYING" and game_state is not None:
-            if not game_state.get("finished"):
-                status_lines = [
-                    f"Turno de ataque: {game_state['current_attacker']} -> {game_state['current_defender']}",
+        if estado == "JUEGO" and estado_partida is not None:
+            if not estado_partida.get("finished"):
+                lineas_estado = [
+                    f"Turno de ataque: {estado_partida['current_attacker']} -> {estado_partida['current_defender']}",
                 ]
             else:
-                status_lines = [
-                    f"Partida terminada. Ganador: {game_state.get('winner')}",
+                lineas_estado = [
+                    f"Partida terminada. Ganador: {estado_partida.get('winner')}",
                 ]
 
-            pending_msg = _process_new_attacks(game_state, processed_attacks)
-            if pending_msg:
-                status_lines = pending_msg
+            mensaje_pendiente = _procesar_nuevos_ataques(estado_partida, ataques_procesados)
+            if mensaje_pendiente:
+                lineas_estado = mensaje_pendiente
 
-            if game_state.get("finished") and _consume_restart_request():
+            if estado_partida.get("finished") and _consumir_solicitud_reinicio():
                 (
                     boards_state_list,
-                    accumulation,
-                    stabilized_layouts,
-                    game_state,
-                    processed_attacks,
-                    status,
-                    status_lines,
-                    last_status_lines_printed,
-                    capture_frames_left,
-                ) = _restart_game()
+                    acumulacion,
+                    distribuciones_estables,
+                    estado_partida,
+                    ataques_procesados,
+                    estado,
+                    lineas_estado,
+                    ultimas_lineas_estado,
+                    frames_captura_restantes,
+                ) = _reiniciar_partida()
 
-        board_ui.draw_board_hud(vis)
-        _draw_status_lines(vis, status_lines)
+        board_ui.dibujar_hud_tablero(vis)
+        _dibujar_lineas_estado(vis, lineas_estado)
 
-        if status_lines != last_status_lines_printed:
-            for line in status_lines:
+        if lineas_estado != ultimas_lineas_estado:
+            for line in lineas_estado:
                 print(line)
-            last_status_lines_printed = list(status_lines)
+            ultimas_lineas_estado = list(lineas_estado)
 
         # mostrar
         cv2.imshow("Tablero", vis)
@@ -163,25 +167,25 @@ def main():
         if key in (27, ord("q")):
             break
 
-        if key == ord("s") and status == "STANDBY":
-            capture_frames_left = CAPTURE_FRAMES
-            accumulation = {"T1": [], "T2": []}
-            status = "CAPTURING"
-            status_lines = [
+        if key == ord("s") and estado == "ESPERA":
+            frames_captura_restantes = CAPTURE_FRAMES
+            acumulacion = {"T1": [], "T2": []}
+            estado = "CAPTURA"
+            lineas_estado = [
                 f"Inicio de captura de layout durante {CAPTURE_FRAMES} frames",
             ]
         elif key == ord("r"):
             (
                 boards_state_list,
-                accumulation,
-                stabilized_layouts,
-                game_state,
-                processed_attacks,
-                status,
-                status_lines,
-                last_status_lines_printed,
-                capture_frames_left,
-            ) = _restart_game()
+                acumulacion,
+                distribuciones_estables,
+                estado_partida,
+                ataques_procesados,
+                estado,
+                lineas_estado,
+                ultimas_lineas_estado,
+                frames_captura_restantes,
+            ) = _reiniciar_partida()
         else:
             handle_keys(key, frame)
 
@@ -200,45 +204,45 @@ def handle_keys(key, frame):
     import board_ui as bu
 
     if key == ord("b"):
-        if bu.board_roi_defined:
-            x0, x1 = sorted([bu.bx_start, bu.bx_end])
-            y0, y1 = sorted([bu.by_start, bu.by_end])
+        if bu.roi_tablero_definido:
+            x0, x1 = sorted([bu.x_inicio_roi_tablero, bu.x_fin_roi_tablero])
+            y0, y1 = sorted([bu.y_inicio_roi_tablero, bu.y_fin_roi_tablero])
             roi_hsv = cv2.cvtColor(frame[y0:y1, x0:x1], cv2.COLOR_BGR2HSV)
-            lo, up = board_tracker.calibrate_board_color_from_roi(roi_hsv)
-            board_tracker.current_lower, board_tracker.current_upper = lo, up
+            lo, up = board_tracker.calibrar_color_tablero_desde_roi(roi_hsv)
+            board_tracker.rango_inferior_actual, board_tracker.rango_superior_actual = lo, up
             print("[INFO] calibrado TABLERO:", lo, up)
         else:
             print("[WARN] dibuja ROI en 'Tablero' primero")
 
     elif key == ord("2"):
-        if bu.board_roi_defined:
-            x0, x1 = sorted([bu.bx_start, bu.bx_end])
-            y0, y1 = sorted([bu.by_start, bu.by_end])
+        if bu.roi_tablero_definido:
+            x0, x1 = sorted([bu.x_inicio_roi_tablero, bu.x_fin_roi_tablero])
+            y0, y1 = sorted([bu.y_inicio_roi_tablero, bu.y_fin_roi_tablero])
             roi_hsv = cv2.cvtColor(frame[y0:y1, x0:x1], cv2.COLOR_BGR2HSV)
-            lo, up = object_tracker.calibrate_ship_two_color_from_roi(roi_hsv)
-            object_tracker.current_ship_two_lower, object_tracker.current_ship_two_upper = lo, up
+            lo, up = object_tracker.calibrar_color_barco_doble_desde_roi(roi_hsv)
+            object_tracker.rango_inferior_barco_doble, object_tracker.rango_superior_barco_doble = lo, up
             print("[INFO] calibrado BARCO x2:", lo, up)
         else:
             print("[WARN] dibuja ROI sobre el barco largo")
 
     elif key == ord("1"):
-        if bu.board_roi_defined:
-            x0, x1 = sorted([bu.bx_start, bu.bx_end])
-            y0, y1 = sorted([bu.by_start, bu.by_end])
+        if bu.roi_tablero_definido:
+            x0, x1 = sorted([bu.x_inicio_roi_tablero, bu.x_fin_roi_tablero])
+            y0, y1 = sorted([bu.y_inicio_roi_tablero, bu.y_fin_roi_tablero])
             roi_hsv = cv2.cvtColor(frame[y0:y1, x0:x1], cv2.COLOR_BGR2HSV)
-            lo, up = object_tracker.calibrate_ship_one_color_from_roi(roi_hsv)
-            object_tracker.current_ship_one_lower, object_tracker.current_ship_one_upper = lo, up
+            lo, up = object_tracker.calibrar_color_barco_simple_desde_roi(roi_hsv)
+            object_tracker.rango_inferior_barco_simple, object_tracker.rango_superior_barco_simple = lo, up
             print("[INFO] calibrado BARCO x1:", lo, up)
         else:
             print("[WARN] dibuja ROI sobre el barco corto")
 
     elif key == ord("m"):
-        if bu.board_roi_defined:
-            x0, x1 = sorted([bu.bx_start, bu.bx_end])
-            y0, y1 = sorted([bu.by_start, bu.by_end])
+        if bu.roi_tablero_definido:
+            x0, x1 = sorted([bu.x_inicio_roi_tablero, bu.x_fin_roi_tablero])
+            y0, y1 = sorted([bu.y_inicio_roi_tablero, bu.y_fin_roi_tablero])
             roi_hsv = cv2.cvtColor(frame[y0:y1, x0:x1], cv2.COLOR_BGR2HSV)
-            lo, up = object_tracker.calibrate_ammo_color_from_roi(roi_hsv)
-            object_tracker.current_ammo_lower, object_tracker.current_ammo_upper = lo, up
+            lo, up = object_tracker.calibrar_color_municion_desde_roi(roi_hsv)
+            object_tracker.rango_inferior_municion, object_tracker.rango_superior_municion = lo, up
             print("[INFO] calibrada MUNICION:", lo, up)
         else:
             print("[WARN] dibuja ROI sobre la municion")
@@ -247,12 +251,12 @@ def handle_keys(key, frame):
 
 def _init_boards():
     return [
-        board_state.init_board_state("T1"),
-        board_state.init_board_state("T2"),
+        board_state.inicializar_estado_tablero("T1"),
+        board_state.inicializar_estado_tablero("T2"),
     ]
 
 
-def _snapshot_layout(layout):
+def _crear_captura_layout(layout):
     return {
         "ship_two_cells": tuple(sorted(layout.get("ship_two_cells", []))),
         "ship_one_cells": tuple(sorted(layout.get("ship_one_cells", []))),
@@ -260,15 +264,15 @@ def _snapshot_layout(layout):
     }
 
 
-def _accumulate_layouts(layouts, accumulation):
+def _acumular_layouts(layouts, acumulacion):
     for layout in layouts:
         name = layout.get("name")
-        if name not in accumulation:
-            accumulation[name] = []
-        accumulation[name].append(_snapshot_layout(layout))
+        if name not in acumulacion:
+            acumulacion[name] = []
+        acumulacion[name].append(_crear_captura_layout(layout))
 
 
-def _select_stable_layouts(samples_map, boards_state_list):
+def _seleccionar_layouts_estables(samples_map, boards_state_list):
     stable = {}
     for slot in boards_state_list:
         name = slot["name"]
@@ -296,7 +300,7 @@ def _select_stable_layouts(samples_map, boards_state_list):
     return stable
 
 
-def _log_stabilized_layouts(stable_layouts, boards_state_list):
+def _registrar_layouts_estables(stable_layouts, boards_state_list):
     if not stable_layouts:
         return
 
@@ -309,7 +313,7 @@ def _log_stabilized_layouts(stable_layouts, boards_state_list):
         ship_one_cells = layout.get("ship_one_cells", [])
 
         def _fmt_cells(cells):
-            return ", ".join(bp._format_cell_label(r, c) for r, c in cells) or "(ninguno)"
+            return ", ".join(bp._formatear_etiqueta_celda(r, c) for r, c in cells) or "(ninguno)"
 
         print(f"[{name}] Tablero {board_size}x{board_size}")
         print(f"    Barcos x2: {_fmt_cells(ship_two_cells)}")
@@ -326,7 +330,7 @@ def _log_stabilized_layouts(stable_layouts, boards_state_list):
         _log_points("Coordenadas x1", slot.get("ship_one_points", []))
 
 
-def _draw_status_lines(vis, lines):
+def _dibujar_lineas_estado(vis, lines):
     if not lines:
         return
     y = 30
@@ -343,19 +347,19 @@ def _draw_status_lines(vis, lines):
         y += 20
 
 
-def _process_new_attacks(game_state, processed_attacks):
+def _procesar_nuevos_ataques(estado_partida, ataques_procesados):
     msgs = None
     files = sorted(glob.glob(os.path.join(ATTACKS_DIR, "T*_*.json")))
     for fp in files:
         fname = os.path.basename(fp)
-        if fname in processed_attacks:
+        if fname in ataques_procesados:
             continue
         try:
             with open(fp, "r", encoding="utf-8") as f:
                 payload = json.load(f)
         except Exception as exc:  # noqa: BLE001
             print(f"[WARN] no se pudo leer {fname}: {exc}")
-            processed_attacks.add(fname)
+            ataques_procesados.add(fname)
             continue
 
         target = payload.get("target")
@@ -363,14 +367,14 @@ def _process_new_attacks(game_state, processed_attacks):
         col = payload.get("col")
         if target is None or row is None or col is None:
             print(f"[WARN] ataque {fname} incompleto")
-            processed_attacks.add(fname)
+            ataques_procesados.add(fname)
             continue
 
-        result = battleship_logic.apply_attack(game_state, target, row, col)
-        processed_attacks.add(fname)
+        result = battleship_logic.aplicar_ataque(estado_partida, target, row, col)
+        ataques_procesados.add(fname)
 
-        msgs = _format_attack_result(result)
-        _write_last_result(result, msgs, game_state)
+        msgs = _formatear_resultado_ataque(result)
+        _escribir_ultimo_resultado(result, msgs, estado_partida)
 
         try:
             os.remove(fp)
@@ -379,7 +383,7 @@ def _process_new_attacks(game_state, processed_attacks):
     return msgs
 
 
-def _consume_restart_request():
+def _consumir_solicitud_reinicio():
     if not os.path.exists(RESTART_FILE):
         return False
     try:
@@ -389,7 +393,7 @@ def _consume_restart_request():
     return True
 
 
-def _clear_pending_attack_files():
+def _limpiar_archivos_ataque_pendientes():
     try:
         for fp in glob.glob(os.path.join(ATTACKS_DIR, "T*_*.json")):
             os.remove(fp)
@@ -397,95 +401,95 @@ def _clear_pending_attack_files():
         pass
 
 
-def _restart_game():
-    _reset_calibration_state()
+def _reiniciar_partida():
+    _reiniciar_calibracion()
 
     boards_state_list = _init_boards()
-    accumulation = {"T1": [], "T2": []}
-    stabilized_layouts = None
-    game_state = None
-    processed_attacks = set()
-    board_state.GLOBAL_ORIGIN = None
-    board_state.GLOBAL_ORIGIN_MISS = 0
-    status = "STANDBY"
-    status_lines = [
+    acumulacion = {"T1": [], "T2": []}
+    distribuciones_estables = None
+    estado_partida = None
+    ataques_procesados = set()
+    board_state.ORIGEN_GLOBAL = None
+    board_state.ORIGEN_GLOBAL_FALLOS = 0
+    estado = "ESPERA"
+    lineas_estado = [
         "Reinicio solicitado. Coloca de nuevo los tableros y calibra si es necesario.",
         f"Pulsa 's' para fijar el layout ({CAPTURE_FRAMES} frames)",
     ]
-    capture_frames_left = 0
+    frames_captura_restantes = 0
 
-    _clear_pending_attack_files()
-    _write_last_result(
+    _limpiar_archivos_ataque_pendientes()
+    _escribir_ultimo_resultado(
         {"timestamp": int(time.time()), "status": "reset"},
-        status_lines,
-        game_state,
+        lineas_estado,
+        estado_partida,
     )
-    last_status_lines_printed = None
+    ultimas_lineas_estado = None
 
     return (
         boards_state_list,
-        accumulation,
-        stabilized_layouts,
-        game_state,
-        processed_attacks,
-        status,
-        status_lines,
-        last_status_lines_printed,
-        capture_frames_left,
+        acumulacion,
+        distribuciones_estables,
+        estado_partida,
+        ataques_procesados,
+        estado,
+        lineas_estado,
+        ultimas_lineas_estado,
+        frames_captura_restantes,
     )
 
 
-def _reset_calibration_state():
+def _reiniciar_calibracion():
     import board_tracker
     import object_tracker
 
-    board_tracker.current_lower = board_tracker.DEFAULT_LOWER.copy()
-    board_tracker.current_upper = board_tracker.DEFAULT_UPPER.copy()
+    board_tracker.rango_inferior_actual = board_tracker.RANGO_INFERIOR_DEFECTO.copy()
+    board_tracker.rango_superior_actual = board_tracker.RANGO_SUPERIOR_DEFECTO.copy()
 
-    object_tracker.current_ship_two_lower = object_tracker.SHIP_TWO_LOWER_DEFAULT.copy()
-    object_tracker.current_ship_two_upper = object_tracker.SHIP_TWO_UPPER_DEFAULT.copy()
-    object_tracker.current_ship_one_lower = object_tracker.SHIP_ONE_LOWER_DEFAULT.copy()
-    object_tracker.current_ship_one_upper = object_tracker.SHIP_ONE_UPPER_DEFAULT.copy()
-    object_tracker.current_ammo_lower = object_tracker.AMMO_LOWER_DEFAULT.copy()
-    object_tracker.current_ammo_upper = object_tracker.AMMO_UPPER_DEFAULT.copy()
-    object_tracker.current_origin_lower = object_tracker.ORIG_LOWER_DEFAULT.copy()
-    object_tracker.current_origin_upper = object_tracker.ORIG_UPPER_DEFAULT.copy()
+    object_tracker.rango_inferior_barco_doble = object_tracker.RANGO_INFERIOR_BARCO_DOBLE_DEFECTO.copy()
+    object_tracker.rango_superior_barco_doble = object_tracker.RANGO_SUPERIOR_BARCO_DOBLE_DEFECTO.copy()
+    object_tracker.rango_inferior_barco_simple = object_tracker.RANGO_INFERIOR_BARCO_SIMPLE_DEFECTO.copy()
+    object_tracker.rango_superior_barco_simple = object_tracker.RANGO_SUPERIOR_BARCO_SIMPLE_DEFECTO.copy()
+    object_tracker.rango_inferior_municion = object_tracker.RANGO_INFERIOR_MUNICION_DEFECTO.copy()
+    object_tracker.rango_superior_municion = object_tracker.RANGO_SUPERIOR_MUNICION_DEFECTO.copy()
+    object_tracker.rango_inferior_origen = object_tracker.RANGO_INFERIOR_ORIGEN_DEFECTO.copy()
+    object_tracker.rango_superior_origen = object_tracker.RANGO_SUPERIOR_ORIGEN_DEFECTO.copy()
 
-    board_ui.board_roi_selecting = False
-    board_ui.board_roi_defined = False
-    board_ui.bx_start = board_ui.by_start = board_ui.bx_end = board_ui.by_end = 0
-    board_ui.measure_points = []
+    board_ui.seleccion_roi_tablero = False
+    board_ui.roi_tablero_definido = False
+    board_ui.x_inicio_roi_tablero = board_ui.y_inicio_roi_tablero = board_ui.x_fin_roi_tablero = board_ui.y_fin_roi_tablero = 0
+    board_ui.puntos_medicion = []
 
-    bp.clear_display_cache()
+    bp.limpiar_cache_visualizacion()
 
 
-def _format_attack_result(result):
+def _formatear_resultado_ataque(result):
     if result is None:
         return None
 
-    status = result.get("status")
-    attacker = result.get("attacker")
-    defender = result.get("defender")
-    cell_label = result.get("cell")
+    estado_resultado = result.get("status")
+    atacante = result.get("attacker")
+    defensor = result.get("defender")
+    etiqueta_celda = result.get("cell")
 
-    if status == "wrong_target":
-        return [f"Turno de {attacker}, se esperaba ataque a {defender}"]
-    if status == "invalid":
-        return [f"Casilla {cell_label} ya usada, repite el disparo"]
-    if status == "agua":
-        return [f"{attacker} dispara a {defender} en {cell_label}: AGUA", "Cambio de turno"]
-    if status == "tocado":
-        return [f"{attacker} dispara a {defender} en {cell_label}: TOCADO", "Sigue el mismo turno"]
-    if status == "hundido":
+    if estado_resultado == "wrong_target":
+        return [f"Turno de {atacante}, se esperaba ataque a {defensor}"]
+    if estado_resultado == "invalid":
+        return [f"Casilla {etiqueta_celda} ya usada, repite el disparo"]
+    if estado_resultado == "agua":
+        return [f"{atacante} dispara a {defensor} en {etiqueta_celda}: AGUA", "Cambio de turno"]
+    if estado_resultado == "tocado":
+        return [f"{atacante} dispara a {defensor} en {etiqueta_celda}: TOCADO", "Sigue el mismo turno"]
+    if estado_resultado == "hundido":
         extra = "Fin de partida" if result.get("winner") else "Sigue el mismo turno"
-        return [f"{attacker} hunde barco en {cell_label} de {defender}", extra]
-    if status == "finished":
-        winner = result.get("winner")
-        return [f"Partida terminada. Ganador: {winner}"]
+        return [f"{atacante} hunde barco en {etiqueta_celda} de {defensor}", extra]
+    if estado_resultado == "finished":
+        ganador = result.get("winner")
+        return [f"Partida terminada. Ganador: {ganador}"]
     return ["Ataque procesado"]
 
 
-def _write_last_result(result, messages, game_state):
+def _escribir_ultimo_resultado(result, messages, estado_partida):
     if result is None:
         return
 
@@ -498,10 +502,10 @@ def _write_last_result(result, messages, game_state):
         "status": result.get("status"),
     }
 
-    if game_state:
-        payload["next_attacker"] = game_state.get("current_attacker")
-        payload["next_defender"] = game_state.get("current_defender")
-        payload["winner"] = game_state.get("winner")
+    if estado_partida:
+        payload["next_attacker"] = estado_partida.get("current_attacker")
+        payload["next_defender"] = estado_partida.get("current_defender")
+        payload["winner"] = estado_partida.get("winner")
 
     try:
         with open(LAST_RESULT_FILE, "w", encoding="utf-8") as f:
@@ -510,11 +514,11 @@ def _write_last_result(result, messages, game_state):
         print(f"[WARN] no se pudo escribir resultado en {LAST_RESULT_FILE}: {exc}")
 
 
-def _snapshot_turn(game_state):
+def _capturar_estado_turno(estado_partida):
     return {
         "timestamp": int(time.time()),
-        "attacker": game_state.get("current_attacker"),
-        "defender": game_state.get("current_defender"),
+        "attacker": estado_partida.get("current_attacker"),
+        "defender": estado_partida.get("current_defender"),
         "status": "turn",
     }
 

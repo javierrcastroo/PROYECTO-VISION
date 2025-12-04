@@ -2,21 +2,21 @@
 import cv2
 
 # ====== ROI PARA COLOR DEL TABLERO (clic izquierdo) ======
-board_roi_selecting = False
-board_roi_defined = False
-bx_start = by_start = bx_end = by_end = 0
+seleccion_roi_tablero = False
+roi_tablero_definido = False
+x_inicio_roi_tablero = y_inicio_roi_tablero = x_fin_roi_tablero = y_fin_roi_tablero = 0
 
 # ====== PUNTOS DE MEDIDA (clic derecho) ======
-measure_points = []   # lista de (x, y)
+puntos_medicion = []   # lista de (x, y)
 
 # ====== ESTADOS DEL TABLERO ======
-_GAME_STATE_TEXTS = {
+_TEXTOS_ESTADO_JUEGO = {
     "standby": "Estado: standby",
     "captura": "Estado: captura",
     "turno": "Estado: turno",
 }
 
-_ATTACK_RESULT_TEXTS = {
+_TEXTOS_RESULTADO_ATAQUE = {
     "invalido": "Ataque invalido",
     "agua": "Ataque en agua",
     "tocado": "Ataque tocado",
@@ -24,83 +24,87 @@ _ATTACK_RESULT_TEXTS = {
     None: "Ataque no disponible",
 }
 
-_current_game_state = _GAME_STATE_TEXTS["standby"]
-_current_attack_result = _ATTACK_RESULT_TEXTS[None]
+_estado_juego_actual = _TEXTOS_ESTADO_JUEGO["standby"]
+_resultado_ataque_actual = _TEXTOS_RESULTADO_ATAQUE[None]
 
 
-def board_mouse_callback(event, x, y, flags, param):
+def callback_raton_tablero(evento, x, y, flags, param):
     """
     - Botón izquierdo: definir ROI del tablero (para calibrar HSV con 'b', 'o', 'm', ...)
     - Botón derecho: añadir punto de medida
     """
-    global board_roi_selecting, board_roi_defined
-    global bx_start, by_start, bx_end, by_end
-    global measure_points
+    global seleccion_roi_tablero, roi_tablero_definido
+    global x_inicio_roi_tablero, y_inicio_roi_tablero, x_fin_roi_tablero, y_fin_roi_tablero
+    global puntos_medicion
 
-    if event == cv2.EVENT_LBUTTONDOWN:
-        board_roi_selecting = True
-        board_roi_defined = False
-        bx_start, by_start = x, y
-        bx_end, by_end = x, y
+    if evento == cv2.EVENT_LBUTTONDOWN:
+        seleccion_roi_tablero = True
+        roi_tablero_definido = False
+        x_inicio_roi_tablero, y_inicio_roi_tablero = x, y
+        x_fin_roi_tablero, y_fin_roi_tablero = x, y
 
-    elif event == cv2.EVENT_MOUSEMOVE and board_roi_selecting:
-        bx_end, by_end = x, y
+    elif evento == cv2.EVENT_MOUSEMOVE and seleccion_roi_tablero:
+        x_fin_roi_tablero, y_fin_roi_tablero = x, y
 
-    elif event == cv2.EVENT_LBUTTONUP:
-        board_roi_selecting = False
-        board_roi_defined = True
-        bx_end, by_end = x, y
+    elif evento == cv2.EVENT_LBUTTONUP:
+        seleccion_roi_tablero = False
+        roi_tablero_definido = True
+        x_fin_roi_tablero, y_fin_roi_tablero = x, y
 
-    elif event == cv2.EVENT_RBUTTONDOWN:
+    elif evento == cv2.EVENT_RBUTTONDOWN:
         # añadir punto de medida
-        measure_points.append((x, y))
+        puntos_medicion.append((x, y))
         # si hay más de 2, reseteamos para empezar otra medida
-        if len(measure_points) > 2:
-            measure_points = [(x, y)]  # empezamos de nuevo solo con este
+        if len(puntos_medicion) > 2:
+            puntos_medicion = [(x, y)]  # empezamos de nuevo solo con este
 
 
-def draw_board_roi(img):
+def dibujar_roi_tablero(img):
     """
     Dibuja el rectángulo del ROI si se está seleccionando.
     """
-    if board_roi_selecting or board_roi_defined:
+    if seleccion_roi_tablero or roi_tablero_definido:
         cv2.rectangle(
             img,
-            (bx_start, by_start),
-            (bx_end,   by_end),
+            (x_inicio_roi_tablero, y_inicio_roi_tablero),
+            (x_fin_roi_tablero,   y_fin_roi_tablero),
             (0, 255, 255),
             2
         )
 
 
-def draw_measure_points(img):
+def dibujar_puntos_medicion(img):
     """
     Dibuja los puntos de medida (clic derecho) sobre la imagen del tablero.
     """
-    for i, (x, y) in enumerate(measure_points):
+    for i, (x, y) in enumerate(puntos_medicion):
         cv2.circle(img, (x, y), 5, (0, 0, 255), -1)
         cv2.putText(img, f"P{i+1}", (x+5, y-5),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,0,255), 1, cv2.LINE_AA)
 
 
-def set_game_state(state_key):
+def establecer_estado_juego(clave_estado):
     """Actualiza el texto mostrado para el estado del tablero."""
-    global _current_game_state
-    _current_game_state = _GAME_STATE_TEXTS.get(state_key, _GAME_STATE_TEXTS["standby"])
+    global _estado_juego_actual
+    _estado_juego_actual = _TEXTOS_ESTADO_JUEGO.get(
+        clave_estado, _TEXTOS_ESTADO_JUEGO["standby"]
+    )
 
 
-def set_attack_result(result_key):
+def establecer_resultado_ataque(clave_resultado):
     """Actualiza el mensaje del ultimo resultado de ataque."""
-    global _current_attack_result
-    _current_attack_result = _ATTACK_RESULT_TEXTS.get(result_key, _ATTACK_RESULT_TEXTS[None])
+    global _resultado_ataque_actual
+    _resultado_ataque_actual = _TEXTOS_RESULTADO_ATAQUE.get(
+        clave_resultado, _TEXTOS_RESULTADO_ATAQUE[None]
+    )
 
 
-def draw_state_status(img):
+def dibujar_estado_partida(img):
     """Dibuja los textos de estado y ultimo ataque en la esquina inferior derecha."""
     if img is None:
         return
 
-    lines = [_current_game_state, _current_attack_result]
+    lines = [_estado_juego_actual, _resultado_ataque_actual]
     margin = 10
     x = img.shape[1] - 300
     y = img.shape[0] - 20
@@ -119,7 +123,7 @@ def draw_state_status(img):
         y -= 20 + margin // 2
 
 
-def draw_board_hud(img):
+def dibujar_hud_tablero(img):
     """
     HUD con las teclas específicas del tablero.
     """
@@ -143,7 +147,7 @@ def draw_board_hud(img):
                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200,255,200), 1, cv2.LINE_AA)
 
 
-def draw_validation_result(img, quad, text, is_valid):
+def dibujar_resultado_validacion(img, quad, text, is_valid):
     if quad is None:
         return
     color = (0, 255, 0) if is_valid else (0, 0, 255)

@@ -1,12 +1,13 @@
 """Validacion sencilla de tableros de Hundir la Flota y gestion de turnos."""
 
-BOARD_LABELS = ["A", "B", "C", "D", "E"]
+ETIQUETAS_TABLERO = ["A", "B", "C", "D", "E"]
 
-def _cells_adjacent(a, b):
+
+def _celdas_adyacentes(a, b):
     return max(abs(a[0] - b[0]), abs(a[1] - b[1])) <= 1
 
 
-def _normalize_cell(cell):
+def _normalizar_celda(cell):
     try:
         row = int(cell[0])
     except (TypeError, ValueError, IndexError):
@@ -18,14 +19,14 @@ def _normalize_cell(cell):
     return (row, col)
 
 
-def _format_cell_label(cell):
-    row, col = _normalize_cell(cell)
+def _formatear_etiqueta_celda(cell):
+    row, col = _normalizar_celda(cell)
     if isinstance(row, int) and isinstance(col, int):
         return f"{chr(ord('A') + col)}{row + 1}"
     return f"{row},{col}"
 
 
-def evaluate_board(layout):
+def evaluar_tablero(layout):
     """Recibe un layout con listas de celdas ocupadas y devuelve (ok, mensaje)."""
     ship_two_cells = layout.get("ship_two_cells", [])
     ship_one_cells = layout.get("ship_one_cells", [])
@@ -56,12 +57,12 @@ def evaluate_board(layout):
     if ship_two_cells:
         for cell in ship_two_cells:
             for other in singles:
-                if _cells_adjacent(cell, other):
+                if _celdas_adyacentes(cell, other):
                     errors.append("Los barcos no pueden tocarse")
                     break
     for idx, cell in enumerate(singles):
         for other in singles[idx + 1:]:
-            if _cells_adjacent(cell, other):
+            if _celdas_adyacentes(cell, other):
                 errors.append("Los barcos no pueden tocarse")
                 break
         if errors:
@@ -70,19 +71,19 @@ def evaluate_board(layout):
     if not errors:
         return True, "Distribucion correcta"
     # devolver solo errores únicos para no repetir el mismo texto
-    uniq_errors = []
+    errores_unicos = []
     for err in errors:
-        if err not in uniq_errors:
-            uniq_errors.append(err)
-    return False, " | ".join(uniq_errors)
+        if err not in errores_unicos:
+            errores_unicos.append(err)
+    return False, " | ".join(errores_unicos)
 
 
-def init_game_state(layouts_by_name):
-    boards = {}
-    for name, layout in layouts_by_name.items():
-        boards[name] = _build_board_from_layout(name, layout)
+def inicializar_estado_partida(layouts_por_nombre):
+    tableros = {}
+    for name, layout in layouts_por_nombre.items():
+        tableros[name] = _construir_tablero_desde_layout(name, layout)
     return {
-        "boards": boards,
+        "boards": tableros,
         "current_attacker": "T1",
         "current_defender": "T2",
         "finished": False,
@@ -90,52 +91,52 @@ def init_game_state(layouts_by_name):
     }
 
 
-def apply_attack(game_state, target_board, row, col):
-    if game_state.get("finished"):
-        return {"status": "finished", "winner": game_state.get("winner")}
+def aplicar_ataque(estado_partida, tablero_objetivo, fila, columna):
+    if estado_partida.get("finished"):
+        return {"status": "finished", "winner": estado_partida.get("winner")}
 
-    attacker = game_state.get("current_attacker")
-    defender = game_state.get("current_defender")
+    atacante = estado_partida.get("current_attacker")
+    defensor = estado_partida.get("current_defender")
 
-    if target_board != defender:
+    if tablero_objetivo != defensor:
         return {
             "status": "wrong_target",
-            "attacker": attacker,
-            "defender": defender,
-            "cell": _format_cell(row, col),
+            "attacker": atacante,
+            "defender": defensor,
+            "cell": _formatear_celda(fila, columna),
         }
 
-    board = game_state["boards"].get(defender)
+    board = estado_partida["boards"].get(defensor)
     if board is None:
         return None
 
-    row_i = int(row)
-    col_i = int(col)
+    row_i = int(fila)
+    col_i = int(columna)
     cell = (row_i, col_i)
     if row_i < 0 or col_i < 0 or row_i >= board["board_size"] or col_i >= board["board_size"]:
         return {
             "status": "invalid",
-            "attacker": attacker,
-            "defender": defender,
-            "cell": _format_cell(row, col),
+            "attacker": atacante,
+            "defender": defensor,
+            "cell": _formatear_celda(fila, columna),
         }
     if cell in board["attacked_cells"]:
         return {
             "status": "invalid",
-            "attacker": attacker,
-            "defender": defender,
-            "cell": _format_cell(row, col),
+            "attacker": atacante,
+            "defender": defensor,
+            "cell": _formatear_celda(fila, columna),
         }
 
     board["attacked_cells"].add(cell)
 
     if cell not in board["cell_to_ship"]:
-        _switch_turn(game_state)
+        _cambiar_turno(estado_partida)
         return {
             "status": "agua",
-            "attacker": attacker,
-            "defender": defender,
-            "cell": _format_cell(row, col),
+            "attacker": atacante,
+            "defender": defensor,
+            "cell": _formatear_celda(fila, columna),
         }
 
     ship_id = board["cell_to_ship"][cell]
@@ -146,26 +147,26 @@ def apply_attack(game_state, target_board, row, col):
         board["ships_alive"] -= 1
         winner = None
         if board["ships_alive"] <= 0:
-            game_state["finished"] = True
-            winner = attacker
-            game_state["winner"] = winner
+            estado_partida["finished"] = True
+            winner = atacante
+            estado_partida["winner"] = winner
         return {
             "status": "hundido",
-            "attacker": attacker,
-            "defender": defender,
-            "cell": _format_cell(row, col),
+            "attacker": atacante,
+            "defender": defensor,
+            "cell": _formatear_celda(fila, columna),
             "winner": winner,
         }
 
     return {
         "status": "tocado",
-        "attacker": attacker,
-        "defender": defender,
-        "cell": _format_cell(row, col),
+        "attacker": atacante,
+        "defender": defensor,
+        "cell": _formatear_celda(fila, columna),
     }
 
 
-def _build_board_from_layout(name, layout):
+def _construir_tablero_desde_layout(name, layout):
     cell_to_ship = {}
     ships = {}
 
@@ -193,14 +194,14 @@ def _build_board_from_layout(name, layout):
     }
 
 
-def _switch_turn(game_state):
-    atk = game_state.get("current_attacker")
-    defn = game_state.get("current_defender")
-    game_state["current_attacker"], game_state["current_defender"] = defn, atk
+def _cambiar_turno(estado_partida):
+    atk = estado_partida.get("current_attacker")
+    defn = estado_partida.get("current_defender")
+    estado_partida["current_attacker"], estado_partida["current_defender"] = defn, atk
 
 
-def _format_cell(row, col):
+def _formatear_celda(row, col):
     col = int(col)
     row = int(row)
-    col_label = BOARD_LABELS[col] if 0 <= col < len(BOARD_LABELS) else str(col)
-    return f"{col_label}{row + 1}"
+    etiqueta_columna = ETIQUETAS_TABLERO[col] if 0 <= col < len(ETIQUETAS_TABLERO) else str(col)
+    return f"{etiqueta_columna}{row + 1}"

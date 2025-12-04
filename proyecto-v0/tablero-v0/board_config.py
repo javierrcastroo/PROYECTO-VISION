@@ -1,8 +1,8 @@
 # board_config.py
 
 # usar calibración de la cámara del tablero
-USE_UNDISTORT_BOARD = True
-BOARD_CAMERA_PARAMS_PATH = "camera_params.npz"  # el que ya tenías
+USAR_CORRECCION_DISTORSION_TABLERO = True
+RUTA_PARAMETROS_CAMARA_TABLERO = "camera_params.npz"  # el que ya tenías
 
 # tamaño de la vista aplanada opcional
-WARP_SIZE = 500
+TAMANO_WARP = 500

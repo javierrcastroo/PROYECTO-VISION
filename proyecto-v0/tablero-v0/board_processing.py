@@ -12,137 +12,137 @@ import board_ui
 last_display_entries = {}
 
 
-def process_all_boards(
-    frame,
-    boards_state_list,
-    cam_mtx=None,
-    dist=None,
-    max_boards=2,
-    warp_size=500,
-    print_detections=True,
+def procesar_todos_los_tableros(
+    frame_bgr,
+    lista_estados_tablero,
+    matriz_camara=None,
+    coef_distorsion=None,
+    max_tableros=2,
+    tamano_warp=500,
+    imprimir_detecciones=True,
 ):
     """
     Detecta varios tableros, los asigna a los slots existentes (T1, T2),
     procesa cada uno y devuelve todo para mostrar.
     """
-    vis_all, boards_found, mask_board = board_tracker.detect_multiple_boards(
-        frame,
-        camera_matrix=cam_mtx,
-        dist_coeffs=dist,
-        max_boards=max_boards,
+    vis_all, tableros_detectados, mascara_tablero = board_tracker.detectar_tableros_multiples(
+        frame_bgr,
+        matriz_camara=matriz_camara,
+        coeficientes_distorsion=coef_distorsion,
+        max_tableros=max_tableros,
     )
 
     # dibujar ROI y HUD
-    board_ui.draw_board_roi(vis_all)
-    board_ui.draw_board_hud(vis_all)
+    board_ui.dibujar_roi_tablero(vis_all)
+    board_ui.dibujar_hud_tablero(vis_all)
 
     # asignar detecciones a slots por cercanía
-    assignments = _assign_detections_to_slots(boards_found, boards_state_list)
+    asignaciones = _asignar_detecciones_a_slots(tableros_detectados, lista_estados_tablero)
 
-    frame_hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    ammo_pts, ammo_mask_show = object_tracker.detect_colored_points_global(
+    frame_hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
+    puntos_municion, mascara_municion = object_tracker.detectar_puntos_coloreados_global(
         frame_hsv,
-        object_tracker.current_ammo_lower,
-        object_tracker.current_ammo_upper,
-        max_objs=12,
-        min_area=30,
+        object_tracker.rango_inferior_municion,
+        object_tracker.rango_superior_municion,
+        max_objetos=12,
+        area_minima=30,
     )
-    for (cx, cy) in ammo_pts:
+    for (cx, cy) in puntos_municion:
         cv2.circle(vis_all, (cx, cy), 6, (255, 0, 255), -1)
 
-    ship_two_mask_show = None
-    ship_one_mask_show = None
-    layouts = []
+    mascara_barco_doble = None
+    mascara_barco_simple = None
+    distribuciones = []
 
-    for slot_idx, slot in enumerate(boards_state_list):
-        det_idx = assignments.get(slot_idx, None)
-        if det_idx is not None:
-            binfo = boards_found[det_idx]
-            quad = binfo["quad"]
+    for indice_slot, slot in enumerate(lista_estados_tablero):
+        indice_det = asignaciones.get(indice_slot, None)
+        if indice_det is not None:
+            info_tablero = tableros_detectados[indice_det]
+            quad = info_tablero["quad"]
             slot["last_quad"] = quad
             slot["miss"] = 0
-            if binfo.get("ratio") is not None:
-                slot["cm_per_pix"] = binfo["ratio"]
-            ship_two_mask_show, ship_one_mask_show, layout_info = process_single_board(
+            if info_tablero.get("ratio") is not None:
+                slot["cm_per_pix"] = info_tablero["ratio"]
+            mascara_barco_doble, mascara_barco_simple, info_distribucion = procesar_tablero(
                 vis_all,
-                frame,
+                frame_bgr,
                 quad,
                 slot,
-                warp_size,
+                tamano_warp,
                 slot.get("cm_per_pix"),
-                print_detections=print_detections,
+                imprimir_detecciones=imprimir_detecciones,
             )
-            if layout_info is not None:
-                layouts.append(layout_info)
+            if info_distribucion is not None:
+                distribuciones.append(info_distribucion)
         else:
-            fallback_or_decay(slot, vis_all)
+            degradar_estado_tablero(slot, vis_all)
 
     return (
         vis_all,
-        mask_board,
-        ship_two_mask_show,
-        ship_one_mask_show,
-        ammo_mask_show,
-        layouts,
+        mascara_tablero,
+        mascara_barco_doble,
+        mascara_barco_simple,
+        mascara_municion,
+        distribuciones,
     )
 
 
-def _assign_detections_to_slots(boards_found, boards_state_list):
+def _asignar_detecciones_a_slots(tableros_detectados, lista_estados_tablero):
     """
     Empareja detecciones de tableros con los slots (T1, T2) por proximidad.
     Así no cambian de nombre cuando el contorno baila.
     """
-    assignments = {}
-    if not boards_found:
-        return assignments
+    asignaciones = {}
+    if not tableros_detectados:
+        return asignaciones
 
     # centros de detección
-    det_centers = []
-    for b in boards_found:
-        quad = b["quad"]
+    centros_detectados = []
+    for tablero in tableros_detectados:
+        quad = tablero["quad"]
         cx = np.mean(quad[:, 0])
         cy = np.mean(quad[:, 1])
-        det_centers.append((cx, cy))
+        centros_detectados.append((cx, cy))
 
     used = set()
-    for slot_idx, slot in enumerate(boards_state_list):
-        best_det = None
-        best_dist = 1e9
+    for indice_slot, slot in enumerate(lista_estados_tablero):
+        mejor_det = None
+        mejor_distancia = 1e9
 
         if slot["last_quad"] is not None:
             sq = slot["last_quad"]
             sx = np.mean(sq[:, 0])
             sy = np.mean(sq[:, 1])
-            slot_center = (sx, sy)
+            centro_slot = (sx, sy)
         else:
-            slot_center = None
+            centro_slot = None
 
-        for det_idx, (dx, dy) in enumerate(det_centers):
-            if det_idx in used:
+        for indice_det, (dx, dy) in enumerate(centros_detectados):
+            if indice_det in used:
                 continue
-            if slot_center is None:
-                best_det = det_idx
+            if centro_slot is None:
+                mejor_det = indice_det
                 break
-            dist = ((dx - slot_center[0]) ** 2 + (dy - slot_center[1]) ** 2) ** 0.5
-            if dist < best_dist:
-                best_dist = dist
-                best_det = det_idx
+            distancia = ((dx - centro_slot[0]) ** 2 + (dy - centro_slot[1]) ** 2) ** 0.5
+            if distancia < mejor_distancia:
+                mejor_distancia = distancia
+                mejor_det = indice_det
 
-        if best_det is not None:
-            assignments[slot_idx] = best_det
-            used.add(best_det)
+        if mejor_det is not None:
+            asignaciones[indice_slot] = mejor_det
+            used.add(mejor_det)
 
-    return assignments
+    return asignaciones
 
 
-def process_single_board(
+def procesar_tablero(
     vis_img,
     frame_bgr,
     quad,
     slot,
-    warp_size=500,
-    cm_per_pix=None,
-    print_detections=True,
+    tamano_warp=500,
+    cm_por_pixel=None,
+    imprimir_detecciones=True,
 ):
     """
     Procesa un tablero individual detectando centros de barcos de dos y una casilla
@@ -157,73 +157,73 @@ def process_single_board(
     dst = np.array(
         [
             [0, 0],
-            [warp_size - 1, 0],
-            [warp_size - 1, warp_size - 1],
-            [0, warp_size - 1],
+            [tamano_warp - 1, 0],
+            [tamano_warp - 1, tamano_warp - 1],
+            [0, tamano_warp - 1],
         ],
         dtype=np.float32,
     )
     H_warp = cv2.getPerspectiveTransform(src, dst)
     H_inv = cv2.getPerspectiveTransform(dst, src)
-    warp_img = cv2.warpPerspective(frame_bgr, H_warp, (warp_size, warp_size))
+    warp_img = cv2.warpPerspective(frame_bgr, H_warp, (tamano_warp, tamano_warp))
 
-    ship_two_pts, ship_two_mask = object_tracker.detect_colored_points_in_board(
+    puntos_barco_doble, mascara_barco_doble = object_tracker.detectar_puntos_coloreados_en_tablero(
         hsv,
         quad,
-        object_tracker.current_ship_two_lower,
-        object_tracker.current_ship_two_upper,
-        max_objs=4,
-        min_area=40,
+        object_tracker.rango_inferior_barco_doble,
+        object_tracker.rango_superior_barco_doble,
+        max_objetos=4,
+        area_minima=40,
     )
 
-    ship_one_pts, ship_one_mask = object_tracker.detect_colored_points_in_board(
+    puntos_barco_simple, mascara_barco_simple = object_tracker.detectar_puntos_coloreados_en_tablero(
         hsv,
         quad,
-        object_tracker.current_ship_one_lower,
-        object_tracker.current_ship_one_upper,
-        max_objs=6,
-        min_area=40,
+        object_tracker.rango_inferior_barco_simple,
+        object_tracker.rango_superior_barco_simple,
+        max_objetos=6,
+        area_minima=40,
     )
 
-    _draw_points(vis_img, ship_two_pts, (0, 0, 255))
-    _draw_points(vis_img, ship_one_pts, (0, 255, 255))
-    _draw_points_on_warp(warp_img, ship_two_pts, H_warp, (0, 0, 255))
-    _draw_points_on_warp(warp_img, ship_one_pts, H_warp, (0, 255, 255))
+    _dibujar_puntos(vis_img, puntos_barco_doble, (0, 0, 255))
+    _dibujar_puntos(vis_img, puntos_barco_simple, (0, 255, 255))
+    _dibujar_puntos_en_warp(warp_img, puntos_barco_doble, H_warp, (0, 0, 255))
+    _dibujar_puntos_en_warp(warp_img, puntos_barco_simple, H_warp, (0, 255, 255))
 
-    ship_two_cells_raw, ship_two_labels = _map_points_to_cells(
-        ship_two_pts, H_warp, warp_size
+    celdas_barco_doble, etiquetas_barco_doble = _mapear_puntos_a_celdas(
+        puntos_barco_doble, H_warp, tamano_warp
     )
-    ship_one_cells_raw, ship_one_labels = _map_points_to_cells(
-        ship_one_pts, H_warp, warp_size
+    celdas_barco_simple, etiquetas_barco_simple = _mapear_puntos_a_celdas(
+        puntos_barco_simple, H_warp, tamano_warp
     )
 
-    slot["ship_two_cells"] = sorted(set(ship_two_cells_raw))
-    slot["ship_one_cells"] = sorted(set(ship_one_cells_raw))
-    slot["ship_two_points"] = list(ship_two_pts)
-    slot["ship_one_points"] = list(ship_one_pts)
+    slot["ship_two_cells"] = sorted(set(celdas_barco_doble))
+    slot["ship_one_cells"] = sorted(set(celdas_barco_simple))
+    slot["ship_two_points"] = list(puntos_barco_doble)
+    slot["ship_one_points"] = list(puntos_barco_simple)
 
-    display_entries = []
-    printable_entries = []
-    for idx, (pt, label) in enumerate(zip(ship_two_pts, ship_two_labels), 1):
-        display_entries.append((f"B2-{idx}", label))
-        printable_entries.append((f"B2-{idx}", label, _format_origin_offset(pt, cm_per_pix)))
-    for idx, (pt, label) in enumerate(zip(ship_one_pts, ship_one_labels), 1):
-        display_entries.append((f"B1-{idx}", label))
-        printable_entries.append((f"B1-{idx}", label, _format_origin_offset(pt, cm_per_pix)))
+    entradas_visualizacion = []
+    entradas_impresion = []
+    for idx, (pt, label) in enumerate(zip(puntos_barco_doble, etiquetas_barco_doble), 1):
+        entradas_visualizacion.append((f"B2-{idx}", label))
+        entradas_impresion.append((f"B2-{idx}", label, _formatear_desplazamiento_origen(pt, cm_por_pixel)))
+    for idx, (pt, label) in enumerate(zip(puntos_barco_simple, etiquetas_barco_simple), 1):
+        entradas_visualizacion.append((f"B1-{idx}", label))
+        entradas_impresion.append((f"B1-{idx}", label, _formatear_desplazamiento_origen(pt, cm_por_pixel)))
 
-    _annotate_detections(vis_img, warp_img, slot["name"], display_entries)
+    _anotar_detecciones(vis_img, warp_img, slot["name"], entradas_visualizacion)
 
-    layout_info = {
+    info_distribucion = {
         "name": slot["name"],
         "ship_two_cells": slot["ship_two_cells"],
         "ship_one_cells": slot["ship_one_cells"],
-        "board_size": board_tracker.BOARD_SQUARES,
+        "board_size": board_tracker.CASILLAS_TABLERO,
     }
 
-    if print_detections and display_entries:
-        key = (slot["name"], tuple(printable_entries))
+    if imprimir_detecciones and entradas_visualizacion:
+        key = (slot["name"], tuple(entradas_impresion))
         if last_display_entries.get(slot["name"]) != key:
-            for tag, label, offset_txt in printable_entries:
+            for tag, label, offset_txt in entradas_impresion:
                 if offset_txt:
                     print(f"[{slot['name']}] {tag} -> {label} | {offset_txt}")
                 else:
@@ -232,12 +232,12 @@ def process_single_board(
 
     cv2.imshow(f"{slot['name']} aplanado", warp_img)
 
-    return ship_two_mask, ship_one_mask, layout_info
+    return mascara_barco_doble, mascara_barco_simple, info_distribucion
 
 
-def fallback_or_decay(slot, vis_img):
+def degradar_estado_tablero(slot, vis_img):
     if slot["last_quad"] is not None and slot["miss"] <= 10:
-        draw_quad(vis_img, slot["last_quad"])
+        dibujar_cuadricula(vis_img, slot["last_quad"])
         slot["miss"] += 1
     else:
         slot["miss"] += 1
@@ -247,73 +247,73 @@ def fallback_or_decay(slot, vis_img):
         slot["ship_one_points"] = []
 
 
-def draw_quad(img, quad, color=(0, 255, 255)):
+def dibujar_cuadricula(img, quad, color=(0, 255, 255)):
     if quad is None:
         return
     q = np.array(quad, dtype=np.int32)
     cv2.polylines(img, [q], True, color, 2)
 
 
-def _map_points_to_cells(points, H_warp, warp_size):
-    if not points:
+def _mapear_puntos_a_celdas(puntos, H_warp, tamano_warp):
+    if not puntos:
         return [], []
 
-    pts = np.array(points, dtype=np.float32).reshape(-1, 1, 2)
+    pts = np.array(puntos, dtype=np.float32).reshape(-1, 1, 2)
     warped = cv2.perspectiveTransform(pts, H_warp).reshape(-1, 2)
-    n = board_tracker.BOARD_SQUARES
+    n = board_tracker.CASILLAS_TABLERO
     if n <= 0:
         return [], []
-    cell_size = warp_size / n
+    tamano_celda = tamano_warp / n
 
-    cells = []
-    labels = []
+    celdas = []
+    etiquetas = []
 
     # Anclamos el origen en la esquina superior izquierda (A1) y
     # avanzamos letras hacia la derecha y números hacia abajo.
-    def _cell_from_axis(coord):
-        return _clip_cell_index(int(np.floor(coord / cell_size)), n)
+    def _celda_desde_eje(coord):
+        return _acotar_indice_celda(int(np.floor(coord / tamano_celda)), n)
 
     for wx, wy in warped:
-        col = _cell_from_axis(wx)
-        row = _cell_from_axis(wy)
-        cells.append((row, col))
-        labels.append(_format_cell_label(row, col))
-    return cells, labels
+        col = _celda_desde_eje(wx)
+        row = _celda_desde_eje(wy)
+        celdas.append((row, col))
+        etiquetas.append(_formatear_etiqueta_celda(row, col))
+    return celdas, etiquetas
 
 
-def _draw_points(img, points, color):
-    for (cx, cy) in points:
+def _dibujar_puntos(img, puntos, color):
+    for (cx, cy) in puntos:
         cv2.circle(img, (int(cx), int(cy)), 6, color, -1)
 
 
-def _draw_points_on_warp(warp_img, points, H_warp, color):
-    if not points:
+def _dibujar_puntos_en_warp(warp_img, puntos, H_warp, color):
+    if not puntos:
         return
-    pts = np.array(points, dtype=np.float32).reshape(-1, 1, 2)
+    pts = np.array(puntos, dtype=np.float32).reshape(-1, 1, 2)
     warped = cv2.perspectiveTransform(pts, H_warp).reshape(-1, 2)
     for wx, wy in warped:
         cv2.circle(warp_img, (int(wx), int(wy)), 6, color, 2)
 
 
-def _annotate_detections(vis_img, warp_img, slot_name, entries):
-    if not entries:
+def _anotar_detecciones(vis_img, warp_img, nombre_slot, entradas):
+    if not entradas:
         return
 
-    y_offset = 120 if slot_name == "T1" else 220
-    for tag, label in entries:
-        text = f"{slot_name}-{tag}: {label}"
+    desplazamiento_y = 120 if nombre_slot == "T1" else 220
+    for tag, label in entradas:
+        texto = f"{nombre_slot}-{tag}: {label}"
         cv2.putText(
             vis_img,
-            text,
-            (10, y_offset),
+            texto,
+            (10, desplazamiento_y),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.5,
             (0, 255, 255),
             1,
         )
-        y_offset += 18
+        desplazamiento_y += 18
 
-    for idx, (tag, label) in enumerate(entries):
+    for idx, (tag, label) in enumerate(entradas):
         base_y = 25 + idx * 22
         cv2.rectangle(warp_img, (10, base_y - 15), (260, base_y + 5), (0, 0, 0), -1)
         cv2.putText(
@@ -328,31 +328,31 @@ def _annotate_detections(vis_img, warp_img, slot_name, entries):
         )
 
 
-def _format_origin_offset(point, cm_per_pix=None):
-    if board_state.GLOBAL_ORIGIN is None:
+def _formatear_desplazamiento_origen(punto, cm_por_pixel=None):
+    if board_state.ORIGEN_GLOBAL is None:
         return None
 
-    ox, oy = board_state.GLOBAL_ORIGIN
-    px_dx = point[0] - ox
-    px_dy = point[1] - oy
+    ox, oy = board_state.ORIGEN_GLOBAL
+    px_dx = punto[0] - ox
+    px_dy = punto[1] - oy
     px_dist = math.hypot(px_dx, px_dy)
 
-    if cm_per_pix:
-        cm_dx = px_dx * cm_per_pix
-        cm_dy = px_dy * cm_per_pix
-        cm_dist = px_dist * cm_per_pix
+    if cm_por_pixel:
+        cm_dx = px_dx * cm_por_pixel
+        cm_dy = px_dy * cm_por_pixel
+        cm_dist = px_dist * cm_por_pixel
         return f"offset ArUco dx={cm_dx:.1f}cm dy={cm_dy:.1f}cm dist={cm_dist:.1f}cm"
 
     return f"offset ArUco dx={px_dx:.1f}px dy={px_dy:.1f}px dist={px_dist:.1f}px"
 
 
-def clear_display_cache():
+def limpiar_cache_visualizacion():
     last_display_entries.clear()
 
 
-def _format_cell_label(row, col):
+def _formatear_etiqueta_celda(row, col):
     return f"{chr(ord('A') + col)}{row + 1}"
 
 
-def _clip_cell_index(idx, n):
+def _acotar_indice_celda(idx, n):
     return max(0, min(n - 1, idx))

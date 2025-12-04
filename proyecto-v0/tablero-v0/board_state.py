@@ -3,12 +3,12 @@
 Gestión del estado de cada tablero + origen global compartido
 """
 
-def init_board_state(name):
+def inicializar_estado_tablero(nombre):
     """
     Crea un diccionario con el estado de un tablero concreto (T1, T2, ...).
     """
     return {
-        "name": name,
+        "name": nombre,
         "last_quad": None,
         "miss": 0,
         "cm_per_pix": None,
@@ -24,6 +24,6 @@ def init_board_state(name):
 
 # origen global = el cubo verde que el usuario calibra con 'r'
 # lo vamos actualizando cada frame
-GLOBAL_ORIGIN = None       # (x, y) en píxeles
-GLOBAL_ORIGIN_MISS = 0     # para aguantar unos frames si desaparece
-GLOBAL_ORIGIN_MAX_MISS = 10
+ORIGEN_GLOBAL = None       # (x, y) en píxeles
+ORIGEN_GLOBAL_FALLOS = 0   # para aguantar unos frames si desaparece
+ORIGEN_GLOBAL_MAX_FALLOS = 10

@@ -6,7 +6,8 @@ import time
 import numpy as np
 
 from hand_config import (
-    PREVIEW_W, PREVIEW_H,
+    PREVIEW_W,
+    PREVIEW_H,
     RECOGNIZE_MODE,
     CONFIDENCE_THRESHOLD,
     USE_UNDISTORT_HAND,
@@ -15,32 +16,29 @@ from hand_config import (
 )
 
 import ui
-from segmentation import (
-    calibrate_from_roi,
-    segment_hand_mask,
-)
-from features import compute_feature_vector
-from classifier import knn_predict
+from segmentation import calibrar_desde_roi, segmentar_mascara_mano
+from features import calcular_vector_caracteristicas
+from classifier import predecir_knn
 from storage import (
-    save_gesture_example,
-    load_gesture_gallery,
-    save_sequence_json,
-    save_restart_request,
+    guardar_ejemplo_gesto,
+    cargar_galeria_gestos,
+    guardar_secuencia_json,
+    guardar_peticion_reinicio,
 )
 from collections import deque
 
-GESTURE_WINDOW_FRAMES = 150
-MAX_SEQUENCE_LENGTH = 2
-TRIGGER_GESTURES = {"5dedos"}
-CONFIRM_GESTURE = "ok"
-REJECT_GESTURE = "nook"
-PRINT_GESTURE = "cool"
-RESTART_GESTURE = "demond"
-CONTROL_GESTURES = TRIGGER_GESTURES | {CONFIRM_GESTURE, REJECT_GESTURE, PRINT_GESTURE}
-TARGET_BOARD = os.environ.get("BATTLESHIP_TARGET", "1")
-FEEDBACK_FILE = os.path.join(ATTACKS_DIR, "last_result.json")
+VENTANA_GESTOS_FRAMES = 150
+LONGITUD_MAXIMA_SECUENCIA = 2
+GESTOS_ACTIVACION = {"5dedos"}
+GESTO_CONFIRMAR = "ok"
+GESTO_RECHAZAR = "nook"
+GESTO_IMPRIMIR = "cool"
+GESTO_REINICIO = "demond"
+GESTOS_CONTROL = GESTOS_ACTIVACION | {GESTO_CONFIRMAR, GESTO_RECHAZAR, GESTO_IMPRIMIR}
+TABLERO_OBJETIVO = os.environ.get("BATTLESHIP_TARGET", "1")
+ARCHIVO_RETROALIMENTACION = os.path.join(ATTACKS_DIR, "last_result.json")
 
-COORD_MAP = {
+MAPA_COORDENADAS = {
     "0dedos": 0,
     "1dedo": 1,
     "2dedos": 2,
@@ -49,320 +47,324 @@ COORD_MAP = {
 }
 
 
-def sequence_to_coord(seq):
-    if len(seq) != 2:
+def secuencia_a_coordenada(secuencia):
+    if len(secuencia) != 2:
         return None
-    col_label, row_label = seq
-    if col_label not in COORD_MAP or row_label not in COORD_MAP:
+    etiqueta_columna, etiqueta_fila = secuencia
+    if etiqueta_columna not in MAPA_COORDENADAS or etiqueta_fila not in MAPA_COORDENADAS:
         return None
-    col = COORD_MAP[col_label]
-    row = COORD_MAP[row_label]
-    return row, col
+    columna = MAPA_COORDENADAS[etiqueta_columna]
+    fila = MAPA_COORDENADAS[etiqueta_fila]
+    return fila, columna
 
 
-def majority_vote(labels):
-    if not labels:
+def voto_mayoritario(etiquetas):
+    if not etiquetas:
         return None
-    return max(set(labels), key=labels.count)
+    return max(set(etiquetas), key=etiquetas.count)
 
 
-class GestureWindow:
-    def __init__(self, size=GESTURE_WINDOW_FRAMES):
-        self.size = size
-        self.labels = []
+class VentanaGestos:
+    def __init__(self, tamano=VENTANA_GESTOS_FRAMES):
+        self.tamano = tamano
+        self.etiquetas = []
 
-    def reset(self):
-        self.labels = []
+    def reiniciar(self):
+        self.etiquetas = []
 
-    def push(self, label):
-        label = label if label is not None else "????"
-        self.labels.append(label)
-        if len(self.labels) >= self.size:
-            winner = majority_vote(self.labels)
-            self.reset()
-            return winner
+    def agregar(self, etiqueta):
+        etiqueta = etiqueta if etiqueta is not None else "????"
+        self.etiquetas.append(etiqueta)
+        if len(self.etiquetas) >= self.tamano:
+            ganadora = voto_mayoritario(self.etiquetas)
+            self.reiniciar()
+            return ganadora
         return None
 
-    def progress(self):
-        if self.size == 0:
+    def progreso(self):
+        if self.tamano == 0:
             return 0.0
-        return min(1.0, len(self.labels) / float(self.size))
+        return min(1.0, len(self.etiquetas) / float(self.tamano))
+
+
+def cargar_ultimo_resultado(archivo_feedback, ultima_marca):
+    if not os.path.exists(archivo_feedback):
+        return ultima_marca, None, None
+
+    try:
+        marca_tiempo = os.path.getmtime(archivo_feedback)
+    except OSError:
+        return ultima_marca, None, None
+
+    if marca_tiempo <= ultima_marca:
+        return ultima_marca, None, None
+
+    try:
+        with open(archivo_feedback, "r", encoding="utf-8") as archivo:
+            payload = json.load(archivo)
+    except (OSError, json.JSONDecodeError):
+        return ultima_marca, None, None
+
+    mensajes = payload.get("messages")
+    if not mensajes:
+        respaldo = payload.get("status") or "Resultado recibido"
+        mensajes = [respaldo]
+
+    return marca_tiempo, mensajes, payload
 
 
 def main():
-    cap = cv2.VideoCapture(0)
-    if not cap.isOpened():
+    captura = cv2.VideoCapture(0)
+    if not captura.isOpened():
         raise RuntimeError("No se pudo abrir la camara 0 (mano)")
 
-    HAND_CAM_MTX = HAND_DIST = None
+    matriz_camara_mano = distorsion_mano = None
     if USE_UNDISTORT_HAND and os.path.exists(HAND_CAMERA_PARAMS_PATH):
-        data = np.load(HAND_CAMERA_PARAMS_PATH)
-        HAND_CAM_MTX = data["camera_matrix"]
-        HAND_DIST = data["dist_coeffs"]
+        datos = np.load(HAND_CAMERA_PARAMS_PATH)
+        matriz_camara_mano = datos["camera_matrix"]
+        distorsion_mano = datos["dist_coeffs"]
         print("[INFO] Undistort activado para la mano")
 
     # estado
-    lower_skin = upper_skin = None
-    gallery = load_gesture_gallery() if RECOGNIZE_MODE else []
-    current_label = "2dedos"
+    piel_inferior = piel_superior = None
+    galeria = cargar_galeria_gestos() if RECOGNIZE_MODE else []
+    etiqueta_actual = "2dedos"
     acciones = []
-    recent_preds = deque(maxlen=7)
-    capture_state = "STANDBY"
-    pending_candidate = None
-    gesture_window = GestureWindow()
-    status_lines = ["Standby: haz '5dedos' para activar el registro."]
-    current_target_board = "T2"
-    attack_counters = {"T1": 0, "T2": 0}
-    feedback_lines = []
-    last_feedback_mtime = 0.0
-    game_finished = False
+    predicciones_recientes = deque(maxlen=7)
+    estado_captura = "ESPERA"
+    candidato_pendiente = None
+    ventana_gestos = VentanaGestos()
+    lineas_estado = ["En espera: haz '5dedos' para activar el registro."]
+    tablero_objetivo_actual = "T2"
+    contadores_ataques = {"T1": 0, "T2": 0}
+    lineas_retroalimentacion = []
+    ultima_modificacion_feedback = 0.0
+    partida_finalizada = False
 
-    def set_state(new_state, lines):
-        nonlocal capture_state, status_lines
-        capture_state = new_state
-        status_lines = lines
-        gesture_window.reset()
-    def _load_last_result(feedback_file, last_mtime):
-        if not os.path.exists(feedback_file):
-            return last_mtime, None, None
+    def establecer_estado(nuevo_estado, lineas):
+        nonlocal estado_captura, lineas_estado
+        estado_captura = nuevo_estado
+        lineas_estado = lineas
+        ventana_gestos.reiniciar()
 
-        try:
-            mtime = os.path.getmtime(feedback_file)
-        except OSError:
-            return last_mtime, None, None
-
-        if mtime <= last_mtime:
-            return last_mtime, None, None
-
-        try:
-            with open(feedback_file, "r", encoding="utf-8") as f:
-                payload = json.load(f)
-        except (OSError, json.JSONDecodeError):
-            return last_mtime, None, None
-
-        messages = payload.get("messages")
-        if not messages:
-            fallback = payload.get("status") or "Resultado recibido"
-            messages = [fallback]
-
-        return mtime, messages, payload
-
-    def set_status(lines):
-        nonlocal status_lines
-        status_lines = lines
+    def actualizar_lineas_estado(lineas):
+        nonlocal lineas_estado
+        lineas_estado = lineas
 
     cv2.namedWindow("Mano")
-    cv2.setMouseCallback("Mano", ui.mouse_callback)
+    cv2.setMouseCallback("Mano", ui.callback_raton)
 
     while True:
-        ok, frame = cap.read()
+        ok, fotograma = captura.read()
         if not ok:
             break
 
         # undistort
-        if HAND_CAM_MTX is not None:
-            frame = cv2.undistort(frame, HAND_CAM_MTX, HAND_DIST)
+        if matriz_camara_mano is not None:
+            fotograma = cv2.undistort(fotograma, matriz_camara_mano, distorsion_mano)
 
         # espejo + resize
-        frame = cv2.flip(frame, 1)
-        frame = cv2.resize(frame, (PREVIEW_W, PREVIEW_H))
-        vis = frame.copy()
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        fotograma = cv2.flip(fotograma, 1)
+        fotograma = cv2.resize(fotograma, (PREVIEW_W, PREVIEW_H))
+        visualizacion = fotograma.copy()
+        hsv = cv2.cvtColor(fotograma, cv2.COLOR_BGR2HSV)
 
         # ROI
-        ui.draw_roi_rectangle(vis)
+        ui.dibujar_rectangulo_roi(visualizacion)
 
         # segmentar mano con el HSV calibrado
-        mask = segment_hand_mask(hsv, lower_skin, upper_skin)
-        ui.draw_hand_box(vis, mask)
-        skin_only = cv2.bitwise_and(frame, frame, mask=mask)
+        mascara = segmentar_mascara_mano(hsv, piel_inferior, piel_superior)
+        ui.dibujar_caja_mano(visualizacion, mascara)
+        piel_sola = cv2.bitwise_and(fotograma, fotograma, mask=mascara)
 
         # features
-        feat_vec = compute_feature_vector(mask)
+        vector_caracteristicas = calcular_vector_caracteristicas(mascara)
 
         # reconocimiento
-        best_dist = None
-        per_frame_label = None
-        if feat_vec is not None and RECOGNIZE_MODE:
-            raw_label, best_dist = knn_predict(feat_vec, gallery, k=5)
-            if raw_label is not None and best_dist is not None:
-                per_frame_label = raw_label if best_dist <= CONFIDENCE_THRESHOLD else "????"
+        mejor_distancia = None
+        etiqueta_por_frame = None
+        if vector_caracteristicas is not None and RECOGNIZE_MODE:
+            etiqueta_bruta, mejor_distancia = predecir_knn(vector_caracteristicas, galeria, k=5)
+            if etiqueta_bruta is not None and mejor_distancia is not None:
+                etiqueta_por_frame = etiqueta_bruta if mejor_distancia <= CONFIDENCE_THRESHOLD else "????"
 
-        if per_frame_label is not None:
-            recent_preds.append(per_frame_label)
-        stable_label = majority_vote(list(recent_preds))
+        if etiqueta_por_frame is not None:
+            predicciones_recientes.append(etiqueta_por_frame)
+        etiqueta_estable = voto_mayoritario(list(predicciones_recientes))
 
         # HUD
-        ui.draw_hud(
-            vis,
-            lower_skin,
-            upper_skin,
-            current_label,
+        ui.dibujar_hud(
+            visualizacion,
+            piel_inferior,
+            piel_superior,
+            etiqueta_actual,
         )
-        ui.draw_prediction(vis, stable_label, best_dist if best_dist else 0.0)
+        ui.dibujar_prediccion(visualizacion, etiqueta_estable, mejor_distancia if mejor_distancia else 0.0)
 
-        last_feedback_mtime, new_feedback, fb_meta = _load_last_result(
-            FEEDBACK_FILE, last_feedback_mtime
+        ultima_modificacion_feedback, nueva_retroalimentacion, metadata_feedback = cargar_ultimo_resultado(
+            ARCHIVO_RETROALIMENTACION, ultima_modificacion_feedback
         )
-        if new_feedback:
-            feedback_lines = new_feedback
-            for line in feedback_lines:
-                print(f"[RESULTADO] {line}")
+        if nueva_retroalimentacion:
+            lineas_retroalimentacion = nueva_retroalimentacion
+            for linea in lineas_retroalimentacion:
+                print(f"[RESULTADO] {linea}")
 
-            next_target = None
-            if fb_meta:
-                next_target = fb_meta.get("next_defender") or fb_meta.get("defender")
-                winner = fb_meta.get("winner")
-                status_flag = fb_meta.get("status")
-                game_finished = bool(winner) or status_flag == "finished"
-                if status_flag == "reset":
-                    game_finished = False
-                    attack_counters = {"T1": 0, "T2": 0}
-            if next_target and next_target != current_target_board:
-                current_target_board = next_target
-                set_status(
+            siguiente_objetivo = None
+            if metadata_feedback:
+                siguiente_objetivo = metadata_feedback.get("next_defender") or metadata_feedback.get("defender")
+                ganador = metadata_feedback.get("winner")
+                estado_meta = metadata_feedback.get("status")
+                partida_finalizada = bool(ganador) or estado_meta == "finished"
+                if estado_meta == "reset":
+                    partida_finalizada = False
+                    contadores_ataques = {"T1": 0, "T2": 0}
+            if siguiente_objetivo and siguiente_objetivo != tablero_objetivo_actual:
+                tablero_objetivo_actual = siguiente_objetivo
+                actualizar_lineas_estado(
                     [
-                        f"Objetivo segun tablero: {current_target_board}",
-                        "Standby: haz '5dedos' para activar el registro.",
+                        f"Objetivo segun tablero: {tablero_objetivo_actual}",
+                        "En espera: haz '5dedos' para activar el registro.",
                     ]
                 )
         else:
-            if fb_meta and fb_meta.get("status") == "turn":
-                game_finished = False
+            if metadata_feedback and metadata_feedback.get("status") == "turn":
+                partida_finalizada = False
 
-        display_lines = status_lines + feedback_lines
-        ui.draw_sequence_status(
-            vis,
+        lineas_a_mostrar = lineas_estado + lineas_retroalimentacion
+        ui.dibujar_estado_secuencia(
+            visualizacion,
             acciones,
-            capture_state,
-            pending_candidate,
-            display_lines,
-            gesture_window.progress(),
+            estado_captura,
+            candidato_pendiente,
+            lineas_a_mostrar,
+            ventana_gestos.progreso(),
         )
 
         # mostrar
-        cv2.imshow("Mano", vis)
-        cv2.imshow("Mascara mano", mask)
-        cv2.imshow("Solo piel mano", skin_only)
+        cv2.imshow("Mano", visualizacion)
+        cv2.imshow("Mascara mano", mascara)
+        cv2.imshow("Solo piel mano", piel_sola)
 
-        key = cv2.waitKey(1) & 0xFF
-        if key in (27, ord('q')):
+        tecla = cv2.waitKey(1) & 0xFF
+        if tecla in (27, ord('q')):
             break
 
         # -------- flujo controlado por gestos --------
-        resolved_label = gesture_window.push(stable_label)
+        etiqueta_resuelta = ventana_gestos.agregar(etiqueta_estable)
 
-        if resolved_label is not None:
-            if game_finished and resolved_label == RESTART_GESTURE:
-                save_restart_request()
+        if etiqueta_resuelta is not None:
+            if partida_finalizada and etiqueta_resuelta == GESTO_REINICIO:
+                guardar_peticion_reinicio()
                 acciones.clear()
-                pending_candidate = None
-                attack_counters = {"T1": 0, "T2": 0}
-                game_finished = False
-                set_state(
-                    "STANDBY",
+                candidato_pendiente = None
+                contadores_ataques = {"T1": 0, "T2": 0}
+                partida_finalizada = False
+                establecer_estado(
+                    "ESPERA",
                     [
                         "Reinicio solicitado. Espera a que el tablero prepare nueva partida.",
-                        "Standby: haz '5dedos' para activar el registro.",
+                        "En espera: haz '5dedos' para activar el registro.",
                     ],
                 )
                 continue
 
-            if capture_state == "STANDBY":
-                if resolved_label in TRIGGER_GESTURES:
-                    set_state("CAPTURA", ["Sistema activo: muestra el primer gesto."])
+            if estado_captura == "ESPERA":
+                if etiqueta_resuelta in GESTOS_ACTIVACION:
+                    establecer_estado("CAPTURA", ["Sistema activo: muestra el primer gesto."])
                 else:
-                    set_status(["Sigue en standby, haz '5dedos' para comenzar."])
+                    actualizar_lineas_estado(["Sigue en espera, haz '5dedos' para comenzar."])
 
-            elif capture_state == "CAPTURA":
-                if resolved_label == "????" or resolved_label in CONTROL_GESTURES:
-                    set_status(["Gesto no valido, repitelo."])
+            elif estado_captura == "CAPTURA":
+                if etiqueta_resuelta == "????" or etiqueta_resuelta in GESTOS_CONTROL:
+                    actualizar_lineas_estado(["Gesto no valido, repitelo."])
                 else:
-                    pending_candidate = resolved_label
-                    set_state(
+                    candidato_pendiente = etiqueta_resuelta
+                    establecer_estado(
                         "CONFIRMACION",
                         [
-                            f"Tu gesto es '{pending_candidate}'?",
+                            f"Tu gesto es '{candidato_pendiente}'?",
                             "Confirma con 'ok' o repite con 'nook'.",
                         ],
                     )
 
-            elif capture_state == "CONFIRMACION":
-                if resolved_label == CONFIRM_GESTURE and pending_candidate:
-                    acciones.append(pending_candidate)
-                    print(f"[INFO] Aniadido gesto confirmado: {pending_candidate}")
-                    pending_candidate = None
-                    if len(acciones) >= MAX_SEQUENCE_LENGTH:
-                        set_state(
-                            "COOL",
+            elif estado_captura == "CONFIRMACION":
+                if etiqueta_resuelta == GESTO_CONFIRMAR and candidato_pendiente:
+                    acciones.append(candidato_pendiente)
+                    print(f"[INFO] Aniadido gesto confirmado: {candidato_pendiente}")
+                    candidato_pendiente = None
+                    if len(acciones) >= LONGITUD_MAXIMA_SECUENCIA:
+                        establecer_estado(
+                            "IMPRESION",
                             ["Secuencia completa, haz 'cool' para imprimirla."],
                         )
                     else:
-                        set_state("CAPTURA", ["Gesto guardado. Muestra el siguiente gesto."])
-                elif resolved_label == REJECT_GESTURE:
+                        establecer_estado("CAPTURA", ["Gesto guardado. Muestra el siguiente gesto."])
+                elif etiqueta_resuelta == GESTO_RECHAZAR:
                     print("[INFO] Gesto rechazado, repite el anterior.")
-                    pending_candidate = None
-                    set_state("CAPTURA", ["Repite el gesto a registrar."])
+                    candidato_pendiente = None
+                    establecer_estado("CAPTURA", ["Repite el gesto a registrar."])
                 else:
-                    set_status(["Se esperaba 'ok' o 'nook'."])
+                    actualizar_lineas_estado(["Se esperaba 'ok' o 'nook'."])
 
-            elif capture_state == "COOL":
-                if resolved_label == PRINT_GESTURE and len(acciones) == MAX_SEQUENCE_LENGTH:
-                    coord = sequence_to_coord(acciones)
+            elif estado_captura == "IMPRESION":
+                if etiqueta_resuelta == GESTO_IMPRIMIR and len(acciones) == LONGITUD_MAXIMA_SECUENCIA:
+                    coord = secuencia_a_coordenada(acciones)
                     if coord is None:
-                        set_status([
-                            "Secuencia invalida para coordenada (usa 0-4 dedos).",
-                            "Repite los dos gestos de columna y fila.",
-                        ])
+                        actualizar_lineas_estado(
+                            [
+                                "Secuencia invalida para coordenada (usa 0-4 dedos).",
+                                "Repite los dos gestos de columna y fila.",
+                            ]
+                        )
                     else:
-                        row, col = coord
-                        attack_counters[current_target_board] += 1
-                        shot_num = attack_counters[current_target_board]
+                        fila, columna = coord
+                        contadores_ataques[tablero_objetivo_actual] += 1
+                        disparo = contadores_ataques[tablero_objetivo_actual]
                         print("[INFO] Secuencia final:", acciones)
-                        save_sequence_json(
+                        guardar_secuencia_json(
                             acciones,
-                            target_name=current_target_board,
-                            shot_number=shot_num,
-                            row=row,
-                            col=col,
+                            nombre_objetivo=tablero_objetivo_actual,
+                            numero_disparo=disparo,
+                            fila=fila,
+                            columna=columna,
                         )
                         acciones.clear()
-                        pending_candidate = None
-                        set_state(
-                            "STANDBY",
+                        candidato_pendiente = None
+                        establecer_estado(
+                            "ESPERA",
                             [
-                                "Standby: haz '5dedos' para activar un nuevo registro.",
-                                f"Objetivo actual: {current_target_board}",
+                                "En espera: haz '5dedos' para activar un nuevo registro.",
+                                f"Objetivo actual: {tablero_objetivo_actual}",
                             ],
                         )
                 else:
-                    set_status(["Secuencia lista. Usa 'cool' para imprimirla."])
+                    actualizar_lineas_estado(["Secuencia lista. Usa 'cool' para imprimirla."])
 
         # -------- teclas de mano --------
-        if key == ord('c'):
-            
-            if ui.roi_defined:
-                x0, x1 = sorted([ui.x_start, ui.x_end])
-                y0, y1 = sorted([ui.y_start, ui.y_end])
+        if tecla == ord('c'):
+
+            if ui.roi_definido:
+                x0, x1 = sorted([ui.x_inicio, ui.x_fin])
+                y0, y1 = sorted([ui.y_inicio, ui.y_fin])
                 if (x1 - x0) > 5 and (y1 - y0) > 5:
                     roi_hsv = hsv[y0:y1, x0:x1]
-                    lower_skin, upper_skin = calibrate_from_roi(roi_hsv)
-                    print("[INFO] calibrado HSV mano:", lower_skin, upper_skin)
+                    piel_inferior, piel_superior = calibrar_desde_roi(roi_hsv)
+                    print("[INFO] calibrado HSV mano:", piel_inferior, piel_superior)
                 else:
                     print("[WARN] ROI muy pequeno")
             else:
                 print("[WARN] dibuja un ROI en 'Mano' primero")
 
-        elif key == ord('g'):
-            if feat_vec is not None:
-                save_gesture_example(feat_vec, current_label)
+        elif tecla == ord('g'):
+            if vector_caracteristicas is not None:
+                guardar_ejemplo_gesto(vector_caracteristicas, etiqueta_actual)
                 if RECOGNIZE_MODE:
-                    gallery.append((feat_vec, current_label))
-                print(f"[INFO] guardado gesto {current_label}")
+                    galeria.append((vector_caracteristicas, etiqueta_actual))
+                print(f"[INFO] guardado gesto {etiqueta_actual}")
             else:
                 print("[WARN] no hay gesto valido")
 
-        elif key in (
+        elif tecla in (
             ord('0'),
             ord('1'),
             ord('2'),
@@ -373,7 +375,7 @@ def main():
             ord('-'),
             ord('n'),
         ):
-            mapping = {
+            mapeo = {
                 ord('0'): "0dedos",
                 ord('1'): "1dedo",
                 ord('2'): "2dedos",
@@ -384,37 +386,11 @@ def main():
                 ord('-'): "cool",
                 ord('n'): "nook",
             }
-            current_label = mapping[key]
+            etiqueta_actual = mapeo[tecla]
 
-    cap.release()
+    captura.release()
     cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":
     main()
-
-
-def _load_last_result(feedback_file, last_mtime):
-    if not os.path.exists(feedback_file):
-        return last_mtime, None, None
-
-    try:
-        mtime = os.path.getmtime(feedback_file)
-    except OSError:
-        return last_mtime, None, None
-
-    if mtime <= last_mtime:
-        return last_mtime, None, None
-
-    try:
-        with open(feedback_file, "r", encoding="utf-8") as f:
-            payload = json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return last_mtime, None, None
-
-    messages = payload.get("messages")
-    if not messages:
-        fallback = payload.get("status") or "Resultado recibido"
-        messages = [fallback]
-
-    return mtime, messages, payload
